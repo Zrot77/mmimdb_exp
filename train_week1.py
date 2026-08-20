@@ -66,7 +66,8 @@ def main():
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
     if args.smoke:
-        args.epochs = 3
+        args.epochs = 5
+        args.eta = 0.0        # 스모크는 결손학습 끄고 순수 결손 하락이 보이게(배관 점검용)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
