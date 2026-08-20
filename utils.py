@@ -56,8 +56,8 @@ def multilabel_probe(ztr, Ytr, zte, Yte, epochs=300, lr=1e-2, device="cpu", seed
     """frozen 임베딩 z → 라벨 선형 probe(BCE). suff(z) = test F1-macro/micro.
     sklearn OneVsRest의 '단일 클래스 라벨' 에러를 피하려 torch Linear+BCE로 학습."""
     torch.manual_seed(seed)
-    ztr = _to_t(ztr, device).float(); Ytr = _to_t(Ytr, device).float()
-    zte = _to_t(zte, device).float(); Yte = _to_t(Yte, device).float()
+    ztr = _to_t(ztr, device).float().to(device); Ytr = _to_t(Ytr, device).float().to(device)
+    zte = _to_t(zte, device).float().to(device); Yte = _to_t(Yte, device).float().to(device)
     clf = nn.Linear(ztr.size(1), Ytr.size(1)).to(device)
     opt = torch.optim.Adam(clf.parameters(), lr=lr)
     for _ in range(epochs):
