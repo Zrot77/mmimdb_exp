@@ -1,0 +1,9 @@
+feats/
+results/
+data/
+*.pt
+*.tar.gz
+wandb/
+__pycache__/
+*.pyc
+slurm-*.out
