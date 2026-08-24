@@ -62,9 +62,12 @@ def main():
     ap.add_argument("--out", default="feats")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--limit", type=int, default=0, help="스모크: split별 앞 N개만")
+    ap.add_argument("--max_pixels", type=int, default=25_000_000,
+                    help="이 픽셀수(=W*H) 초과 이미지는 스킵(디코딩 느리고 드묾). 0=제한 없음")
     args = ap.parse_args()
 
     from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None      # 초대형 포스터에서 DecompressionBomb 하드에러 방지
     from transformers import CLIPModel, CLIPProcessor
 
     dataset_dir = os.path.join(args.raw_root, "dataset")
@@ -84,6 +87,7 @@ def main():
             ids = ids[:args.limit]
         imgs_z, txts_z, ys, kept = [], [], [], []
         buf_img, buf_txt, buf_id, buf_y = [], [], [], []
+        big = 0    # 너무 큰 이미지로 스킵된 수
 
         def flush():
             if not buf_img:
@@ -105,7 +109,11 @@ def main():
                 continue
             try:
                 obj = json.load(open(jp, encoding="utf-8"))
-                img = Image.open(ip).convert("RGB")
+                img = Image.open(ip)                       # lazy: 헤더만 읽어 크기 확인
+                if args.max_pixels and img.width * img.height > args.max_pixels:
+                    big += 1
+                    continue                               # 지나치게 큰 이미지 제외
+                img = img.convert("RGB")
             except Exception:
                 continue
             buf_img.append(img); buf_txt.append(parse_plot(obj) or " ")
@@ -122,7 +130,7 @@ def main():
                "ids": kept}
         path = os.path.join(args.out, "feats_{}.pt".format(name))
         torch.save(out, path)
-        print("saved {}: {} samples -> {}".format(name, len(kept), path))
+        print("saved {}: {} samples (너무 큰 이미지 스킵 {}) -> {}".format(name, len(kept), big, path))
 
 
 if __name__ == "__main__":

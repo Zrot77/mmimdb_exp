@@ -2,7 +2,7 @@
 #   conda create -n mmimdb python=3.10 -y && conda activate mmimdb
 #   pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118
 #   pip install -r requirements-mmimdb.txt
-transformers>=4.30,<5      # CLIP (openai/clip-vit-base-patch32)
+transformers==4.44.2       # CLIP. 4.46+는 torch>=2.1 요구 → 우리 torch 2.0.1과 호환되게 고정
 pillow                     # 이미지 로드
 scikit-learn               # F1 지표
 numpy<2                    # torch 2.0.1 호환(numpy 2 금지)
