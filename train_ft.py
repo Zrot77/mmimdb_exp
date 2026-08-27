@@ -70,7 +70,8 @@ class FTModel(nn.Module):
 
 def make_loader(args, split, shuffle):
     if args.mode == "synthetic":
-        ds = SyntheticFT(n={"train": 400, "test": 200}[split], seed={"train": 0, "test": 2}[split])
+        ds = SyntheticFT(n={"train": 400, "dev": 200, "test": 200}[split],
+                         seed={"train": 0, "dev": 1, "test": 2}[split])
     else:
         from transformers import CLIPProcessor
         proc = CLIPProcessor.from_pretrained(CLIP_NAME)
@@ -138,13 +139,20 @@ def main():
             tot += float(loss.detach())
         print("  epoch {:>2d}  loss={:.4f}".format(ep + 1, tot / max(1, len(tr))))
 
-    # suff(z_image): 학습된 이미지 인코더를 freeze 후 probe
+    # suff(z_image): 학습된 이미지 인코더를 freeze 후 probe.
+    # probe는 train에 fit, train/val/test에 각각 eval → train↔val 격차로 과적합 점검(v7 §4).
+    va = make_loader(args, "dev", shuffle=False)
     zi_tr, y_tr = extract_z(model, tr, device)
+    zi_va, y_va = extract_z(model, va, device)
     zi_te, y_te = extract_z(model, te, device)
-    suff = multilabel_probe(zi_tr, y_tr, zi_te, y_te, device=device, seed=args.seed)
-    print("  suff(z_image) [{}] = {:.3f}  (F1-macro)".format(tag, suff["f1_macro"]))
+    s_tr = multilabel_probe(zi_tr, y_tr, zi_tr, y_tr, device=device, seed=args.seed)["f1_macro"]
+    s_va = multilabel_probe(zi_tr, y_tr, zi_va, y_va, device=device, seed=args.seed)["f1_macro"]
+    s_te = multilabel_probe(zi_tr, y_tr, zi_te, y_te, device=device, seed=args.seed)["f1_macro"]
+    print("  suff(z_image) [{}] train {:.3f} / val {:.3f} / test {:.3f}  (과적합 격차 train-val {:+.3f})".format(
+        tag, s_tr, s_va, s_te, s_tr - s_va))
 
-    res = {"tag": tag, "config": vars(args), "suff_z_image": suff}
+    res = {"tag": tag, "config": vars(args),
+           "suff_z_image": {"train": s_tr, "val": s_va, "test": s_te, "overfit_gap": s_tr - s_va}}
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
 
