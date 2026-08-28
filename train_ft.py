@@ -105,6 +105,10 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="results/ft.json")
+    ap.add_argument("--early_stop", action="store_true", help="val suff 기준 조기중단(과적합 통제)")
+    ap.add_argument("--eval_every", type=int, default=4, help="조기중단: 몇 epoch마다 val suff 평가")
+    ap.add_argument("--probe_subset", type=int, default=4000, help="조기중단 val 평가용 train 서브셋(속도)")
+    ap.add_argument("--wd", type=float, default=0.0, help="weight decay(과적합 통제)")
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
     if args.smoke:
@@ -115,13 +119,25 @@ def main():
 
     tr = make_loader(args, "train", shuffle=True)
     te = make_loader(args, "test", shuffle=False)
+    from torch.utils.data import Subset
     model = FTModel(args.backbone, args.unfreeze_last).to(device)
     params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(params, lr=args.lr)
+    opt = torch.optim.Adam(params, lr=args.lr, weight_decay=args.wd)
     tag = "{}{}".format(args.objective, "+noise" if args.img_aug == "noise" else "")
-    print("=== FT | {} | backbone={} mode={} | 학습파라미터 {} | dev={} ===".format(
-        tag, args.backbone, args.mode, sum(p.numel() for p in params), device))
+    print("=== FT | {} | backbone={} mode={} | 학습파라미터 {} | wd={} es={} | dev={} ===".format(
+        tag, args.backbone, args.mode, sum(p.numel() for p in params), args.wd, args.early_stop, device))
 
+    va = make_loader(args, "dev", shuffle=False)
+    n_sub = min(args.probe_subset, len(tr.dataset))
+    sub_loader = DataLoader(Subset(tr.dataset, list(range(n_sub))),
+                            batch_size=args.batch, shuffle=False, num_workers=args.workers)
+
+    def val_suff():
+        zt, yt = extract_z(model, sub_loader, device)
+        zv, yv = extract_z(model, va, device)
+        return multilabel_probe(zt, yt, zv, yv, device=device, seed=args.seed)["f1_macro"]
+
+    best = {"val": -1.0, "state": None, "ep": args.epochs, "curve": []}
     for ep in range(args.epochs):
         model.train(); tot = 0.0
         for px, txt, y in tr:
@@ -138,10 +154,18 @@ def main():
             opt.zero_grad(); loss.backward(); opt.step()
             tot += float(loss.detach())
         print("  epoch {:>2d}  loss={:.4f}".format(ep + 1, tot / max(1, len(tr))))
+        if args.early_stop and ((ep + 1) % args.eval_every == 0 or ep + 1 == args.epochs):
+            vs = val_suff()
+            best["curve"].append([ep + 1, round(vs, 4)])
+            if vs > best["val"]:
+                best.update(val=vs, ep=ep + 1,
+                            state={k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
+            print("    [val] ep {} val_suff={:.3f}  (best {:.3f}@{})".format(ep + 1, vs, best["val"], best["ep"]))
+    if args.early_stop and best["state"] is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best["state"].items()})
+        print("  => 조기중단 선택: epoch {} (val_suff {:.3f})".format(best["ep"], best["val"]))
 
-    # suff(z_image): 학습된 이미지 인코더를 freeze 후 probe.
-    # probe는 train에 fit, train/val/test에 각각 eval → train↔val 격차로 과적합 점검(v7 §4).
-    va = make_loader(args, "dev", shuffle=False)
+    # suff(z_image): (조기중단 선택된) 인코더 freeze 후 probe. train fit, train/val/test eval.
     zi_tr, y_tr = extract_z(model, tr, device)
     zi_va, y_va = extract_z(model, va, device)
     zi_te, y_te = extract_z(model, te, device)
@@ -152,7 +176,9 @@ def main():
         tag, s_tr, s_va, s_te, s_tr - s_va))
 
     res = {"tag": tag, "config": vars(args),
-           "suff_z_image": {"train": s_tr, "val": s_va, "test": s_te, "overfit_gap": s_tr - s_va}}
+           "suff_z_image": {"train": s_tr, "val": s_va, "test": s_te, "overfit_gap": s_tr - s_va},
+           "early_stop": {"best_epoch": best["ep"], "best_val": best["val"], "curve": best["curve"]}
+           if args.early_stop else None}
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
 
