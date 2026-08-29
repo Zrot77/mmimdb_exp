@@ -98,6 +98,10 @@ def main():
     ap.add_argument("--unfreeze_last", type=int, default=3)
     ap.add_argument("--img_aug", choices=["none", "noise"], default="none")
     ap.add_argument("--sigma", type=float, default=0.3)
+    ap.add_argument("--feat_aug", choices=["none", "noise", "dropout"], default="none",
+                    help="블록2: 정렬 직전 feature(z_image) 개입(픽셀 대신) — 얼어있는 앞단 우회")
+    ap.add_argument("--feat_sigma", type=float, default=0.3)
+    ap.add_argument("--feat_p", type=float, default=0.3)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--batch", type=int, default=64)
@@ -123,7 +127,9 @@ def main():
     model = FTModel(args.backbone, args.unfreeze_last).to(device)
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.Adam(params, lr=args.lr, weight_decay=args.wd)
-    tag = "{}{}".format(args.objective, "+noise" if args.img_aug == "noise" else "")
+    tag = "{}{}{}".format(args.objective,
+                          "+pixnoise" if args.img_aug == "noise" else "",
+                          "+f{}".format(args.feat_aug) if args.feat_aug != "none" else "")
     print("=== FT | {} | backbone={} mode={} | 학습파라미터 {} | wd={} es={} | dev={} ===".format(
         tag, args.backbone, args.mode, sum(p.numel() for p in params), args.wd, args.early_stop, device))
 
@@ -145,6 +151,10 @@ def main():
             if args.img_aug == "noise":
                 px = px + args.sigma * torch.randn_like(px)
             zi = model.encode_image(px)
+            if args.feat_aug == "noise":                              # 블록2: feature-level 개입
+                zi = zi + args.feat_sigma * torch.randn_like(zi)
+            elif args.feat_aug == "dropout":
+                zi = F.dropout(zi, p=args.feat_p, training=True)
             if args.objective == "supervised":
                 loss = F.binary_cross_entropy_with_logits(model.cls(zi), y)
             elif args.objective == "supcon":
