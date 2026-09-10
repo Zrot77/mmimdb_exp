@@ -1,7 +1,8 @@
 """v11 (정식) — 처방 라운드 기준선, 파인튜닝 L0 세팅 (캐시 아님, 충실판).
 이미지 타워 L0 파인튜닝(마지막 3블록) + 텍스트 고정 앵커(캐시 특징) + proj + fusion 분류기.
 처방(noise/gamma/combo)을 넣고 결손 강건 성능(full/image/text/both × F1 macro/micro/weighted) 측정.
-주 지표 = 결손 강건 성능, 보조 = suff. 과적합 통제 = val 이미지 suff 조기중단 + weight decay.
+주 지표 = 결손 강건 성능, 보조 = suff. 과적합 통제 = val full-micro F1 조기중단 + weight decay.
+차등 lr: CLIP 백본 1e-5, 랜덤 초기화 head(proj/분류기) 1e-3 (안 그러면 분류기 학습 안 됨).
 
 실행:
   python train_v11.py --mode synthetic --backbone stub --smoke
@@ -16,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from data_ft import ImageTextFT, SyntheticFT
 from train_ft import StubVision
@@ -104,7 +105,8 @@ def main():
     ap.add_argument("--w_align", type=float, default=1.0)
     ap.add_argument("--temp", type=float, default=0.07)
     ap.add_argument("--epochs", type=int, default=8)
-    ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--lr", type=float, default=1e-5, help="CLIP 백본 파인튜닝 lr")
+    ap.add_argument("--head_lr", type=float, default=1e-3, help="proj/분류기(랜덤 초기화) lr — 백본보다 크게")
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--workers", type=int, default=4)
@@ -125,19 +127,18 @@ def main():
     va = make_loader(args, "dev", False)
     te = make_loader(args, "test", False)
     model = V11Model(args.backbone, args.unfreeze_last, args.dim).to(device)
-    params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(params, lr=args.lr, weight_decay=args.wd)
-    print("=== v11(FT) | presc={} sig={} gam={} | 학습파라미터 {} | dev={} ===".format(
-        args.presc, args.presc_sigma, args.gamma, sum(p.numel() for p in params), device))
+    # 차등 lr: 랜덤 초기화 head(proj·분류기)는 백본보다 크게 — 안 그러면 분류기가 학습이 안 됨
+    head_params = [p for m in (model.pi, model.pt, model.cls, model.head_i, model.head_t) for p in m.parameters()]
+    hid = set(id(p) for p in head_params)
+    bb_params = [p for p in model.parameters() if p.requires_grad and id(p) not in hid]
+    opt = torch.optim.Adam([{"params": bb_params, "lr": args.lr},
+                            {"params": head_params, "lr": args.head_lr}], weight_decay=args.wd)
+    print("=== v11(FT) | presc={} sig={} gam={} | 백본 {} (lr {}) + head {} (lr {}) | dev={} ===".format(
+        args.presc, args.presc_sigma, args.gamma,
+        sum(p.numel() for p in bb_params), args.lr, sum(p.numel() for p in head_params), args.head_lr, device))
 
-    n_sub = min(args.probe_subset, len(tr.dataset))
-    sub = DataLoader(Subset(tr.dataset, list(range(n_sub))), batch_size=args.batch, shuffle=False,
-                     num_workers=args.workers)
-
-    def val_img_suff():
-        pi, _, ys = extract_proj(model, sub, device)
-        pv, _, yv = extract_proj(model, va, device)
-        return multilabel_probe(pi, ys, pv, yv, device=device, seed=args.seed)["f1_macro"]
+    def val_metric():
+        return eval_missing(model, va, device)["full"]["micro"]   # 주 지표(결손 F1)에 맞춘 ES
 
     best = {"val": -1.0, "state": None, "ep": args.epochs}
     for ep in range(args.epochs):
@@ -159,11 +160,11 @@ def main():
             tot += float(loss.detach())
         print("  epoch {:>2d}  loss={:.4f}".format(ep + 1, tot / max(1, len(tr))))
         if args.early_stop and ((ep + 1) % args.eval_every == 0 or ep + 1 == args.epochs):
-            vs = val_img_suff()
+            vs = val_metric()
             if vs > best["val"]:
                 best.update(val=vs, ep=ep + 1,
                             state={k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
-            print("    [val] ep {} img_suff={:.3f} (best {:.3f}@{})".format(ep + 1, vs, best["val"], best["ep"]))
+            print("    [val] ep {} full_micro={:.3f} (best {:.3f}@{})".format(ep + 1, vs, best["val"], best["ep"]))
     if args.early_stop and best["state"] is not None:
         model.load_state_dict({k: v.to(device) for k, v in best["state"].items()})
         print("  => 조기중단 선택: epoch {}".format(best["ep"]))
