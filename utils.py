@@ -46,6 +46,15 @@ def f1_macro_micro(logits, Y, thresh=0.5):
             f1_score(Yt, pred, average="micro", zero_division=0))
 
 
+def f1_all(logits, Y, thresh=0.5):
+    """다중라벨 F1 세 종 (macro/micro/weighted)."""
+    pred = (torch.sigmoid(logits) > thresh).int().cpu().numpy()
+    Yt = Y.int().cpu().numpy()
+    return {"macro": float(f1_score(Yt, pred, average="macro", zero_division=0)),
+            "micro": float(f1_score(Yt, pred, average="micro", zero_division=0)),
+            "weighted": float(f1_score(Yt, pred, average="weighted", zero_division=0))}
+
+
 # ============================ 다중라벨 frozen probe (suff) ============================
 @torch.no_grad()
 def _to_t(x, device):

@@ -23,8 +23,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from data_features import get_split, apply_missing, train_missing_mask
-from utils import info_nce, supcon_multilabel, align_cos, f1_macro_micro, multilabel_probe, N_GENRE
+from data_features import get_split, train_missing_mask
+from utils import info_nce, align_cos, f1_all, multilabel_probe, N_GENRE
 
 
 class MMHeadV9(nn.Module):
@@ -44,14 +44,16 @@ class MMHeadV9(nn.Module):
 
 
 def evaluate(net, zi, zt, y, device):
+    """full/image결손/text결손/both결손 각각 F1(macro/micro/weighted)."""
     net.eval()
     out = {}
     with torch.no_grad():
         pi, pt = net.proj(zi.to(device), zt.to(device))
-        for regime in ("full", "image", "text"):
-            pim, ptm = apply_missing(pi, pt, regime)
-            fm, fmi = f1_macro_micro(net.classify(pim, ptm), y.to(device))
-            out[regime] = {"f1_macro": float(fm), "f1_micro": float(fmi)}
+        z0i, z0t = torch.zeros_like(pi), torch.zeros_like(pt)
+        regimes = {"full": (pi, pt), "image": (z0i, pt), "text": (pi, z0t), "both": (z0i, z0t)}
+        yt = y.to(device)
+        for r, (a, b) in regimes.items():
+            out[r] = f1_all(net.classify(a, b), yt)
     return out
 
 
@@ -67,7 +69,7 @@ def main():
     ap.add_argument("--beta", type=float, default=0.3)
     ap.add_argument("--w_align", type=float, default=1.0)
     ap.add_argument("--eta", type=float, default=0.0, help="결손학습률(v9 baseline은 0 → 붕괴 노출)")
-    ap.add_argument("--presc", choices=["none", "noise", "gamma", "mmr"], default="none")
+    ap.add_argument("--presc", choices=["none", "noise", "gamma", "combo", "mmr"], default="none")
     ap.add_argument("--presc_sigma", type=float, default=0.3, help="noise 처방 σ")
     ap.add_argument("--gamma", type=float, default=1.0, help="gamma 처방 가중치")
     ap.add_argument("--mmr_w", type=float, default=1.0, help="mmr 처방 가중치")
@@ -95,14 +97,14 @@ def main():
         for zi, zt, y in loader:
             zi, zt, y = zi.to(device), zt.to(device), y.to(device)
             pi, pt = net.proj(zi, zt)
-            if args.presc == "noise":                              # 처방 A: feature noise
+            if args.presc in ("noise", "combo"):                   # 처방 A: feature noise
                 pi = pi + args.presc_sigma * torch.randn_like(pi)
                 pt = pt + args.presc_sigma * torch.randn_like(pt)
             lc = info_nce(pi, pt, args.temp)
             pim, ptm = train_missing_mask(pi, pt, args.eta)
             loss = (F.binary_cross_entropy_with_logits(net.classify(pim, ptm), y)
                     + args.w_align * lc + args.beta * align_cos(pi, pt))
-            if args.presc == "gamma":                              # 처방 B: sufficiency head
+            if args.presc in ("gamma", "combo"):                   # 처방 B: sufficiency head
                 loss = loss + args.gamma * (
                     F.binary_cross_entropy_with_logits(net.head_i(pi), y)
                     + F.binary_cross_entropy_with_logits(net.head_t(pt), y))
@@ -125,9 +127,10 @@ def main():
     si = multilabel_probe(pi_tr, y_tr, pi_te, y_te, device=device, seed=args.seed)["f1_macro"]
     stx = multilabel_probe(pt_tr, y_tr, pt_te, y_te, device=device, seed=args.seed)["f1_macro"]
 
-    print("\n--- 결손 성능 (F1-macro) ---")
-    for r in ("full", "image", "text"):
-        print("  {:6s}: {:.3f}".format(r, ev[r]["f1_macro"]))
+    print("\n--- 결손 성능 (F1 macro / micro / weighted) ---")
+    for r in ("full", "image", "text", "both"):
+        e = ev[r]
+        print("  {:6s}: {:.3f} / {:.3f} / {:.3f}".format(r, e["macro"], e["micro"], e["weighted"]))
     print("--- suff (frozen probe) ---  z_image {:.3f}  z_text {:.3f}".format(si, stx))
 
     res = {"presc": args.presc, "config": vars(args), "eval": ev,
