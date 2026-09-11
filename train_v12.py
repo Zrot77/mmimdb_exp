@@ -256,10 +256,11 @@ def train_step(model, px, txt, y, args, teacher=None):
 
     if m == "ib":
         logit_star, comp = model.ib_forward(pi, pt, sample=True)
-        logit_full = model.classify(pi, pt)                            # 참조 p(y|f)
+        logit_full = model.classify(pi, pt)                            # 참조(충분) p(y|f)
         suff = bernoulli_kl(torch.sigmoid(logit_full).detach(), torch.sigmoid(logit_star))
         lc = info_nce(pi, pt, args.temp)
         return (F.binary_cross_entropy_with_logits(logit_star, y)
+                + F.binary_cross_entropy_with_logits(logit_full, y)    # 참조 분류기 지도(빠지면 teacher 랜덤→붕괴)
                 + args.ib_beta * comp + args.lam_suff * suff
                 + args.gamma * (F.binary_cross_entropy_with_logits(model.head_i(pi), y)
                                 + F.binary_cross_entropy_with_logits(model.head_t(pt), y))
@@ -355,6 +356,9 @@ def main():
     args = ap.parse_args()
     if args.smoke:
         args.epochs = 2
+    if args.raw_root:                                  # ~ 확장(셸 따옴표 안에서 미확장 방지)
+        args.raw_root = os.path.expanduser(args.raw_root)
+    args.feat_dir = os.path.expanduser(args.feat_dir)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
