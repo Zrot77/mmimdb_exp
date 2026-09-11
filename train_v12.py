@@ -143,9 +143,10 @@ def extract_proj(model, loader, device):
 
 
 def bernoulli_kl(p, q, eps=1e-6):
-    """다중라벨 Bernoulli KL[p‖q] (p=교사 확률 detach, q=학생 확률)."""
+    """다중라벨 Bernoulli KL[p‖q] (p=교사 확률 detach, q=학생 확률).
+    라벨 평균(mean)으로 스케일을 BCE(요소평균)와 맞춤 — 안 그러면 KL이 23배 커져 KD/IB가 학습 지배."""
     p = p.clamp(eps, 1 - eps); q = q.clamp(eps, 1 - eps)
-    return (p * (p / q).log() + (1 - p) * ((1 - p) / (1 - q)).log()).sum(1).mean()
+    return (p * (p / q).log() + (1 - p) * ((1 - p) / (1 - q)).log()).mean()
 
 
 # ============================ 방법별 추론(결손 평가) ============================
