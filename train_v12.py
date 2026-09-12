@@ -227,16 +227,14 @@ def train_step(model, px, txt, y, args, teacher=None):
         return loss
 
     if m == "mmin":
-        # 결손패턴 학습: 배치마다 none/image/text 중 하나 샘플
-        r = np.random.choice(["none", "image", "text"])
+        # 결손패턴 학습: 샘플별 none/image/text (원 MMIN처럼 다양한 결손 패턴 노출)
         pi_hat, pt_hat = model.cra_t2i(pt), model.cra_i2t(pi)
         rec = (F.mse_loss(pi_hat, pi.detach()) + F.mse_loss(pt_hat, pt.detach()))
-        if r == "none":
-            a, b = pi, pt
-        elif r == "image":
-            a, b = pi_hat, pt
-        else:
-            a, b = pi, pt_hat
+        patt = torch.randint(0, 3, (pi.size(0), 1), device=pi.device)   # 0 none / 1 image결손 / 2 text결손
+        use_pi_hat = (patt == 1).float()                                # image 결손 → pi를 재구성으로 대체
+        use_pt_hat = (patt == 2).float()                                # text 결손 → pt를 재구성으로 대체
+        a = pi * (1 - use_pi_hat) + pi_hat * use_pi_hat
+        b = pt * (1 - use_pt_hat) + pt_hat * use_pt_hat
         lc = info_nce(pi, pt, args.temp)
         return (F.binary_cross_entropy_with_logits(model.classify(a, b), y)
                 + args.lam_rec * rec + args.w_align * lc + args.beta * align_cos(pi, pt))
