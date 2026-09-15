@@ -316,6 +316,22 @@ def ib_check(model, loader, device):
             "compress_kl": float(comp)}
 
 
+@torch.no_grad()
+def usage_metrics(model, pi_te, pt_te, device):
+    """사용 층위(H3) — fusion 분류기가 각 모달을 얼마나 쓰는가.
+    가중치 norm(정적) + 활성 기여도 ||W_mod @ z||(동적). text결손 강건 = 이미지(약모달) 사용 비중↑.
+    img_usage_share = 이미지 기여 / (이미지+텍스트 기여) — ModDrop이 올릴 것으로 예측(사용 재조정)."""
+    W = model.cls.weight.detach()                       # (n_cls, 2*dim)
+    d = model.dim
+    Wi, Wt = W[:, :d], W[:, d:]
+    pi, pt = pi_te.to(device), pt_te.to(device)
+    img_contrib = (pi @ Wi.t()).norm(dim=1).mean().item()   # 결손 시 남은 이미지 기여 크기
+    txt_contrib = (pt @ Wt.t()).norm(dim=1).mean().item()   # = text 자리 0으로 넣을 때 출력 변화량
+    share = img_contrib / (img_contrib + txt_contrib + 1e-9)
+    return {"img_w_norm": Wi.norm().item(), "txt_w_norm": Wt.norm().item(),
+            "img_contrib": img_contrib, "txt_contrib": txt_contrib, "img_usage_share": share}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["synthetic", "real"], default="synthetic")
@@ -350,6 +366,7 @@ def main():
     ap.add_argument("--eval_every", type=int, default=4)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="results/v12.json")
+    ap.add_argument("--save_preds", default=None, help="H2용 text결손 per-sample 이진예측+라벨 .pt 저장 경로")
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
     if args.smoke:
@@ -387,17 +404,25 @@ def main():
         checks = recon_check(model, te, device)
     elif args.method == "ib":
         checks = ib_check(model, te, device)
+    usage = usage_metrics(model, pi_te, pt_te, device)          # H3 사용 층위
+
+    if args.save_preds:                                          # H2 per-sample text결손 예측
+        lt = infer_logits(model, pi_te.to(device), pt_te.to(device), "text", device)
+        torch.save({"pred_text": (torch.sigmoid(lt) > 0.5).int().cpu(), "y": y_te.int().cpu()}, args.save_preds)
+        print(">>> preds saved", args.save_preds)
 
     print("\n--- 결손 성능 (F1 macro / micro / weighted) ---")
     for r in ("full", "image", "text", "both"):
         e = ev[r]
         print("  {:6s}: {:.3f} / {:.3f} / {:.3f}".format(r, e["macro"], e["micro"], e["weighted"]))
     print("--- suff --- z_image {:.3f}  z_text {:.3f}".format(si, stx))
+    print("--- usage --- img_share {:.3f} (img_contrib {:.2f} / txt_contrib {:.2f})".format(
+        usage["img_usage_share"], usage["img_contrib"], usage["txt_contrib"]))
     if checks:
         print("--- 재현 체크 ---", checks)
 
     res = {"method": args.method, "config": vars(args), "eval": ev,
-           "suff": {"z_image": si, "z_text": stx}, "checks": checks}
+           "suff": {"z_image": si, "z_text": stx}, "usage": usage, "checks": checks}
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
 
