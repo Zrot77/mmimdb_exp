@@ -34,6 +34,7 @@ from train_ft import StubVision
 from utils import info_nce, align_cos, f1_all, multilabel_probe, N_GENRE
 
 CLIP_NAME = "openai/clip-vit-base-patch32"
+SIGLIP_NAME = "google/siglip-so400m-patch14-384"
 
 
 # ============================ CRA (MMIN 핵심) ============================
@@ -66,11 +67,13 @@ class CRA(nn.Module):
 # ============================ 모델 ============================
 class V12Model(nn.Module):
     def __init__(self, method="zerofill", backbone="clip", unfreeze_last=3, dim=256,
-                 n_cls=N_GENRE, cra_blocks=3, ib_bottleneck=128, clip_name=CLIP_NAME):
+                 n_cls=N_GENRE, cra_blocks=3, ib_bottleneck=128, clip_name=CLIP_NAME,
+                 siglip_name=SIGLIP_NAME):
         super().__init__()
         self.method = method
         self.backbone = backbone
         self.dim = dim
+        txt_dim = 512                                   # 텍스트 앵커 = CLIP 텍스트(512) 유지(강한 채로, 이미지만 교체)
         if backbone == "clip":
             from transformers import CLIPModel
             self.clip = CLIPModel.from_pretrained(clip_name)
@@ -82,11 +85,30 @@ class V12Model(nn.Module):
             for m in (self.clip.visual_projection, self.clip.vision_model.post_layernorm):
                 for p in m.parameters():
                     p.requires_grad_(True)
+            img_dim = 512
+        elif backbone == "siglip":
+            from transformers import SiglipModel
+            self.siglip = SiglipModel.from_pretrained(siglip_name)
+            for p in self.siglip.parameters():
+                p.requires_grad_(False)
+            vm = self.siglip.vision_model                # v11 L0 방식: 마지막 블록들 + 풀링헤드 + post_layernorm FT
+            for blk in vm.encoder.layers[-unfreeze_last:]:
+                for p in blk.parameters():
+                    p.requires_grad_(True)
+            ft_mods = [vm.post_layernorm]
+            if getattr(vm, "head", None) is not None:
+                ft_mods.append(vm.head)                  # 어텐션 풀링 헤드(so400m)
+            for m in ft_mods:
+                for p in m.parameters():
+                    p.requires_grad_(True)
+            img_dim = self.siglip.config.vision_config.hidden_size   # so400m = 1152
         else:
             self.vision = StubVision(512)
+            img_dim = 512
+        self.img_dim, self.txt_dim = img_dim, txt_dim
         # 공통 proj + fusion 분류기 (+ 브랜치 head: gamma/ib용)
-        self.pi = nn.Linear(512, dim)
-        self.pt = nn.Linear(512, dim)
+        self.pi = nn.Linear(img_dim, dim)
+        self.pt = nn.Linear(txt_dim, dim)
         self.cls = nn.Linear(2 * dim, n_cls)
         self.head_i = nn.Linear(dim, n_cls)
         self.head_t = nn.Linear(dim, n_cls)
@@ -102,7 +124,11 @@ class V12Model(nn.Module):
             self.cls_ib = nn.Linear(ib_bottleneck, n_cls)
 
     def encode_image(self, px):
-        return self.clip.get_image_features(pixel_values=px) if self.backbone == "clip" else self.vision(px)
+        if self.backbone == "clip":
+            return self.clip.get_image_features(pixel_values=px)
+        if self.backbone == "siglip":
+            return self.siglip.get_image_features(pixel_values=px)
+        return self.vision(px)
 
     def proj(self, zi, zt):
         return self.pi(zi), self.pt(zt)
@@ -125,8 +151,16 @@ def make_loader(args, split, shuffle):
         ds = SyntheticFT(n={"train": 400, "dev": 200, "test": 200}[split],
                          seed={"train": 0, "dev": 1, "test": 2}[split])
     else:
-        from transformers import CLIPProcessor
-        ds = ImageTextFT(args.feat_dir, args.raw_root, split, CLIPProcessor.from_pretrained(CLIP_NAME))
+        if args.backbone == "siglip":
+            from transformers import AutoProcessor       # SigLIP 이미지 전처리(384px), 텍스트는 캐시 CLIP 앵커 사용
+            proc = AutoProcessor.from_pretrained(args.siglip_name)
+        else:
+            from transformers import CLIPProcessor
+            proc = CLIPProcessor.from_pretrained(CLIP_NAME)
+        ds = ImageTextFT(args.feat_dir, args.raw_root, split, proc)
+    if getattr(args, "limit", 0) and args.mode == "real":       # 스모크: 앞 N개만(SigLIP 경로 빠른 점검)
+        from torch.utils.data import Subset
+        ds = Subset(ds, list(range(min(args.limit, len(ds)))))
     return DataLoader(ds, batch_size=args.batch, shuffle=shuffle, num_workers=args.workers)
 
 
@@ -269,7 +303,8 @@ def train_step(model, px, txt, y, args, teacher=None):
 
 def run_training(args, method, tr, va, device, teacher=None, tag=""):
     model = V12Model(method, args.backbone, args.unfreeze_last, args.dim,
-                     cra_blocks=args.cra_blocks, ib_bottleneck=args.ib_bottleneck).to(device)
+                     cra_blocks=args.cra_blocks, ib_bottleneck=args.ib_bottleneck,
+                     siglip_name=args.siglip_name).to(device)
     opt = build_opt(model, args)
     nbb = sum(p.numel() for g in opt.param_groups[:1] for p in g["params"])
     print("=== v12 {} | method={} | backbone {} | dev={} ===".format(tag, method, args.backbone, device))
@@ -337,7 +372,8 @@ def main():
     ap.add_argument("--mode", choices=["synthetic", "real"], default="synthetic")
     ap.add_argument("--feat_dir", default="feats")
     ap.add_argument("--raw_root", default=None)
-    ap.add_argument("--backbone", choices=["clip", "stub"], default="clip")
+    ap.add_argument("--backbone", choices=["clip", "siglip", "stub"], default="clip")
+    ap.add_argument("--siglip_name", default=SIGLIP_NAME)
     ap.add_argument("--method", choices=["zerofill", "gamma", "moddrop", "mmin", "kd", "ib",
                                          "gamma_moddrop"], default="zerofill")
     ap.add_argument("--unfreeze_last", type=int, default=3)
@@ -367,6 +403,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="results/v12.json")
     ap.add_argument("--save_preds", default=None, help="H2용 text결손 per-sample 이진예측+라벨 .pt 저장 경로")
+    ap.add_argument("--limit", type=int, default=0, help="real 스모크: 각 split 앞 N개만")
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
     if args.smoke:

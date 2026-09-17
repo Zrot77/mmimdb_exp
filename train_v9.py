@@ -28,10 +28,10 @@ from utils import info_nce, align_cos, f1_all, multilabel_probe, N_GENRE
 
 
 class MMHeadV9(nn.Module):
-    def __init__(self, in_dim=512, dim=256, n_cls=N_GENRE):
+    def __init__(self, img_dim=512, txt_dim=512, dim=256, n_cls=N_GENRE):
         super().__init__()
-        self.pi = nn.Linear(in_dim, dim)
-        self.pt = nn.Linear(in_dim, dim)
+        self.pi = nn.Linear(img_dim, dim)     # 이미지·텍스트 특징 차원이 다를 수 있음(SigLIP img 1152 + CLIP txt 512)
+        self.pt = nn.Linear(txt_dim, dim)
         self.cls = nn.Linear(2 * dim, n_cls)
         self.head_i = nn.Linear(dim, n_cls)   # gamma 처방용
         self.head_t = nn.Linear(dim, n_cls)
@@ -88,7 +88,7 @@ def main():
     print("=== v9 | presc={} | mode={} train={} test={} | dev={} ===".format(
         args.presc, args.mode, len(y_tr), len(y_te), device))
 
-    net = MMHeadV9(zi_tr.size(1), args.dim, N_GENRE).to(device)
+    net = MMHeadV9(zi_tr.size(1), zt_tr.size(1), args.dim, N_GENRE).to(device)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
     loader = DataLoader(TensorDataset(zi_tr, zt_tr, y_tr), batch_size=args.batch, shuffle=True)
 
