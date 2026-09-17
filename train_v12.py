@@ -33,6 +33,8 @@ from data_ft import ImageTextFT, SyntheticFT
 from train_ft import StubVision
 from utils import info_nce, align_cos, f1_all, multilabel_probe, N_GENRE
 
+torch.multiprocessing.set_sharing_strategy("file_system")   # DataLoader FD 고갈(Too many open files) 방지
+
 CLIP_NAME = "openai/clip-vit-base-patch32"
 SIGLIP_NAME = "google/siglip-so400m-patch14-384"
 
