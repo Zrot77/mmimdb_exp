@@ -354,6 +354,47 @@ def ib_check(model, loader, device):
 
 
 @torch.no_grad()
+def ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, seed):
+    """IB 인과: 병목 f*가 라벨정보(suff)를 유지하며 총분산·유효차원(nuisance)을 얼마나 줄이나.
+    가설 — SigLIP: suff_fstar≈suff_f(라벨 보존)인데 분산·유효차원 크게↓(nuisance 제거) / CLIP: suff_fstar<suff_f(뺄 게 적어 신호까지 손실)."""
+    g = torch.sigmoid(model.ib_gate)
+
+    def ff(pi, pt):
+        f = torch.cat([pi.to(device), pt.to(device)], 1) * g
+        return f.cpu(), model.ib_mu(f).cpu()
+
+    f_tr, fs_tr = ff(pi_tr, pt_tr)
+    f_te, fs_te = ff(pi_te, pt_te)
+
+    def eff_rank(X):
+        Xc = X - X.mean(0, keepdim=True)
+        s = torch.linalg.svdvals(Xc)
+        p = s / s.sum().clamp(min=1e-9)
+        return float(torch.exp(-(p * (p + 1e-12).log()).sum()))
+
+    sf = multilabel_probe(f_tr, y_tr, f_te, y_te, device=device, seed=seed)["f1_macro"]
+    sfs = multilabel_probe(fs_tr, y_tr, fs_te, y_te, device=device, seed=seed)["f1_macro"]
+    return {"suff_f": sf, "suff_fstar": sfs,
+            "var_f": float(f_te.var(0).sum()), "var_fstar": float(fs_te.var(0).sum()),
+            "effrank_f": eff_rank(f_te), "effrank_fstar": eff_rank(fs_te)}
+
+
+@torch.no_grad()
+def mmin_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, seed):
+    """MMIN 인과: 이미지→텍스트 재구성(pt_hat)이 이미지(pi)를 넘는 라벨정보를 주나(중복성).
+    가설 — suff_pt_hat≈suff_pi 및 suff_pi_plus_pthat≈suff_pi면 재구성은 중복(새 정보 없음) → mmin 약함 설명."""
+    pth_tr = model.cra_i2t(pi_tr.to(device)).cpu()
+    pth_te = model.cra_i2t(pi_te.to(device)).cpu()
+
+    def s(a_tr, a_te):
+        return multilabel_probe(a_tr, y_tr, a_te, y_te, device=device, seed=seed)["f1_macro"]
+
+    return {"suff_pi": s(pi_tr, pi_te), "suff_pt": s(pt_tr, pt_te),
+            "suff_pt_hat": s(pth_tr, pth_te),
+            "suff_pi_plus_pthat": s(torch.cat([pi_tr, pth_tr], 1), torch.cat([pi_te, pth_te], 1))}
+
+
+@torch.no_grad()
 def usage_metrics(model, pi_te, pt_te, device):
     """사용 층위(H3) — fusion 분류기가 각 모달을 얼마나 쓰는가.
     가중치 norm(정적) + 활성 기여도 ||W_mod @ z||(동적). text결손 강건 = 이미지(약모달) 사용 비중↑.
@@ -405,6 +446,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="results/v12.json")
     ap.add_argument("--save_preds", default=None, help="H2용 text결손 per-sample 이진예측+라벨 .pt 저장 경로")
+    ap.add_argument("--causal", action="store_true", help="IB/MMIN 인과 probe(suff·분산·중복성) 추가 측정")
     ap.add_argument("--limit", type=int, default=0, help="real 스모크: 각 split 앞 N개만")
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
@@ -444,6 +486,11 @@ def main():
     elif args.method == "ib":
         checks = ib_check(model, te, device)
     usage = usage_metrics(model, pi_te, pt_te, device)          # H3 사용 층위
+    if args.causal:                                             # 인과 probe(IB nuisance 제거 / MMIN 중복성)
+        if args.method == "ib":
+            checks.update(ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
+        elif args.method == "mmin":
+            checks.update(mmin_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
 
     if args.save_preds:                                          # H2 per-sample text결손 예측
         lt = infer_logits(model, pi_te.to(device), pt_te.to(device), "text", device)
