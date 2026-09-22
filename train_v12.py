@@ -353,18 +353,19 @@ def ib_check(model, loader, device):
             "compress_kl": float(comp)}
 
 
-@torch.no_grad()
 def ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, seed):
     """IB 인과: 병목 f*가 라벨정보(suff)를 유지하며 총분산·유효차원(nuisance)을 얼마나 줄이나.
-    가설 — SigLIP: suff_fstar≈suff_f(라벨 보존)인데 분산·유효차원 크게↓(nuisance 제거) / CLIP: suff_fstar<suff_f(뺄 게 적어 신호까지 손실)."""
-    g = torch.sigmoid(model.ib_gate)
+    가설 — SigLIP: suff_fstar≈suff_f(라벨 보존)인데 분산·유효차원 크게↓(nuisance 제거) / CLIP: suff_fstar<suff_f(뺄 게 적어 신호까지 손실).
+    주의: 데코레이터 no_grad 금지 — 아래 multilabel_probe가 probe 학습에 grad 필요. 특징 추출만 no_grad."""
+    with torch.no_grad():
+        g = torch.sigmoid(model.ib_gate)
 
-    def ff(pi, pt):
-        f = torch.cat([pi.to(device), pt.to(device)], 1) * g
-        return f.cpu(), model.ib_mu(f).cpu()
+        def ff(pi, pt):
+            f = torch.cat([pi.to(device), pt.to(device)], 1) * g
+            return f.cpu(), model.ib_mu(f).cpu()
 
-    f_tr, fs_tr = ff(pi_tr, pt_tr)
-    f_te, fs_te = ff(pi_te, pt_te)
+        f_tr, fs_tr = ff(pi_tr, pt_tr)
+        f_te, fs_te = ff(pi_te, pt_te)
 
     def eff_rank(X):
         Xc = X - X.mean(0, keepdim=True)
@@ -379,12 +380,13 @@ def ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, seed):
             "effrank_f": eff_rank(f_te), "effrank_fstar": eff_rank(fs_te)}
 
 
-@torch.no_grad()
 def mmin_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, seed):
     """MMIN 인과: 이미지→텍스트 재구성(pt_hat)이 이미지(pi)를 넘는 라벨정보를 주나(중복성).
-    가설 — suff_pt_hat≈suff_pi 및 suff_pi_plus_pthat≈suff_pi면 재구성은 중복(새 정보 없음) → mmin 약함 설명."""
-    pth_tr = model.cra_i2t(pi_tr.to(device)).cpu()
-    pth_te = model.cra_i2t(pi_te.to(device)).cpu()
+    가설 — suff_pt_hat≈suff_pi 및 suff_pi_plus_pthat≈suff_pi면 재구성은 중복(새 정보 없음) → mmin 약함 설명.
+    주의: 데코레이터 no_grad 금지 — probe 학습에 grad 필요. 재구성만 no_grad."""
+    with torch.no_grad():
+        pth_tr = model.cra_i2t(pi_tr.to(device)).cpu()
+        pth_te = model.cra_i2t(pi_te.to(device)).cpu()
 
     def s(a_tr, a_te):
         return multilabel_probe(a_tr, y_tr, a_te, y_te, device=device, seed=seed)["f1_macro"]
@@ -487,10 +489,13 @@ def main():
         checks = ib_check(model, te, device)
     usage = usage_metrics(model, pi_te, pt_te, device)          # H3 사용 층위
     if args.causal:                                             # 인과 probe(IB nuisance 제거 / MMIN 중복성)
-        if args.method == "ib":
-            checks.update(ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
-        elif args.method == "mmin":
-            checks.update(mmin_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
+        try:                                                    # 실패해도 학습 결과는 저장(비싼 SigLIP 런 보호)
+            if args.method == "ib":
+                checks.update(ib_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
+            elif args.method == "mmin":
+                checks.update(mmin_causal(model, pi_tr, pt_tr, y_tr, pi_te, pt_te, y_te, device, args.seed))
+        except Exception as e:
+            print("  [warn] causal probe 실패, 건너뜀:", repr(e))
 
     if args.save_preds:                                          # H2 per-sample text결손 예측
         lt = infer_logits(model, pi_te.to(device), pt_te.to(device), "text", device)
