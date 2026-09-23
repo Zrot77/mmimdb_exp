@@ -51,6 +51,9 @@ def main():
     print("SigLIP 로드:", args.model)
     model = AutoModel.from_pretrained(args.model).to(device).eval()
     proc = AutoProcessor.from_pretrained(args.model)
+    vc = model.config.vision_config
+    print("  patch {} | img_res {} | hidden {}".format(
+        getattr(vc, "patch_size", "?"), getattr(vc, "image_size", "?"), getattr(vc, "hidden_size", "?")))
 
     for split in ("train", "dev", "test"):
         d = torch.load(os.path.join(args.feat_dir, "feats_{}.pt".format(split)), map_location="cpu")

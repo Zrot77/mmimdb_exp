@@ -89,21 +89,23 @@ class V12Model(nn.Module):
                     p.requires_grad_(True)
             img_dim = 512
         elif backbone == "siglip":
-            from transformers import SiglipModel
-            self.siglip = SiglipModel.from_pretrained(siglip_name)
+            from transformers import AutoModel                       # base/large/so400m/siglip2 일반 로드
+            self.siglip = AutoModel.from_pretrained(siglip_name)
             for p in self.siglip.parameters():
                 p.requires_grad_(False)
             vm = self.siglip.vision_model                # v11 L0 방식: 마지막 블록들 + 풀링헤드 + post_layernorm FT
             for blk in vm.encoder.layers[-unfreeze_last:]:
                 for p in blk.parameters():
                     p.requires_grad_(True)
-            ft_mods = [vm.post_layernorm]
-            if getattr(vm, "head", None) is not None:
-                ft_mods.append(vm.head)                  # 어텐션 풀링 헤드(so400m)
-            for m in ft_mods:
-                for p in m.parameters():
-                    p.requires_grad_(True)
-            img_dim = self.siglip.config.vision_config.hidden_size   # so400m = 1152
+            for nm in ("post_layernorm", "head"):        # 있으면 풀링헤드·post_ln도 FT
+                m = getattr(vm, nm, None)
+                if m is not None:
+                    for p in m.parameters():
+                        p.requires_grad_(True)
+            vc = self.siglip.config.vision_config
+            img_dim = vc.hidden_size                                 # base 768 / large 1024 / so400m 1152
+            print("  [siglip] {} | patch {} | img_res {} | hidden {}".format(
+                siglip_name, getattr(vc, "patch_size", "?"), getattr(vc, "image_size", "?"), img_dim))
         else:
             self.vision = StubVision(512)
             img_dim = 512
