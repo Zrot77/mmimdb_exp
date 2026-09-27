@@ -46,11 +46,11 @@ def main():
 
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
-    from transformers import AutoModel, AutoProcessor
+    from transformers import AutoModel, AutoImageProcessor
 
     print("SigLIP 로드:", args.model)
     model = AutoModel.from_pretrained(args.model).to(device).eval()
-    proc = AutoProcessor.from_pretrained(args.model)
+    proc = AutoImageProcessor.from_pretrained(args.model)     # 이미지 전용(텍스트 미사용, siglip2 tokenizer 이슈 회피)
     vc = model.config.vision_config
     print("  patch {} | img_res {} | hidden {}".format(
         getattr(vc, "patch_size", "?"), getattr(vc, "image_size", "?"), getattr(vc, "hidden_size", "?")))
@@ -67,11 +67,9 @@ def main():
         def flush():
             if not buf_img:
                 return
-            inp = proc(text=buf_txt, images=buf_img, return_tensors="pt",
-                       padding="max_length", truncation=True, max_length=args.max_text_len)
+            inp = proc(images=buf_img, return_tensors="pt")     # 이미지만(텍스트 미사용)
             zi = model.get_image_features(pixel_values=inp["pixel_values"].to(device))
-            zt = model.get_text_features(input_ids=inp["input_ids"].to(device))
-            imgs_z.append(zi.cpu()); txts_z.append(zt.cpu())
+            imgs_z.append(zi.cpu()); txts_z.append(torch.zeros(zi.size(0), zi.size(1)))   # txt는 placeholder(미사용)
             ys.extend(buf_y); kept.extend(buf_id)
             buf_img.clear(); buf_txt.clear(); buf_y.clear(); buf_id.clear()
 

@@ -156,8 +156,8 @@ def make_loader(args, split, shuffle):
                          seed={"train": 0, "dev": 1, "test": 2}[split])
     else:
         if args.backbone == "siglip":
-            from transformers import AutoProcessor       # SigLIP 이미지 전처리(384px), 텍스트는 캐시 CLIP 앵커 사용
-            proc = AutoProcessor.from_pretrained(args.siglip_name)
+            from transformers import AutoImageProcessor   # 이미지 전용(텍스트는 CLIP 앵커) → siglip2 tokenizer 이슈 회피
+            proc = AutoImageProcessor.from_pretrained(args.siglip_name)
         else:
             from transformers import CLIPProcessor
             proc = CLIPProcessor.from_pretrained(CLIP_NAME)
