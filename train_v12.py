@@ -458,6 +458,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default="results/v12.json")
     ap.add_argument("--save_preds", default=None, help="H2용 text결손 per-sample 이진예측+라벨 .pt 저장 경로")
+    ap.add_argument("--save_model", default=None, help="학습된 모델 체크포인트 저장(TLP 등 후속용)")
     ap.add_argument("--causal", action="store_true", help="IB/MMIN 인과 probe(suff·분산·중복성) 추가 측정")
     ap.add_argument("--limit", type=int, default=0, help="real 스모크: 각 split 앞 N개만")
     ap.add_argument("--smoke", action="store_true")
@@ -485,6 +486,10 @@ def main():
         print("  [KD] 교사 full macro/micro = {:.3f}/{:.3f}".format(t_ev["macro"], t_ev["micro"]))
 
     model = run_training(args, args.method, tr, va, device, teacher=teacher, tag="[main]")
+    if args.save_model:                                         # TLP 등 후속용 체크포인트
+        os.makedirs(os.path.dirname(args.save_model) or ".", exist_ok=True)
+        torch.save({"state": model.state_dict(), "config": vars(args)}, args.save_model)
+        print(">>> model saved", args.save_model)
 
     ev = eval_missing(model, te, device)
     pi_tr, pt_tr, y_tr = extract_proj(model, tr, device)
