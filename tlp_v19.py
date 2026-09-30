@@ -36,6 +36,7 @@ def main():
     ap.add_argument("--feat_dir", default="feats")
     ap.add_argument("--etas", default="0.3,0.5,0.7")
     ap.add_argument("--K", type=int, default=5, help="TLP 최적화 스텝(원 논문 1 또는 5)")
+    ap.add_argument("--lam_u", type=float, default=1.0, help="L_u(불확실성) 가중치. 0=L_c만(멀티라벨 격리 검증)")
     ap.add_argument("--lr", type=float, default=1e-2)
     ap.add_argument("--tlp_batch", type=int, default=32)
     ap.add_argument("--missing", default="text", choices=["text", "image", "both"])
@@ -108,7 +109,7 @@ def main():
                     d = torch.cdist(qm.detach(), qc.detach())
                     anchor = qc.detach()[d.argmin(1)]
                     Lc = bernoulli_kl(anchor, qm)
-                loss = Lu + (1.0 / C) * Lc
+                loss = cli.lam_u * Lu + (1.0 / C) * Lc
                 opt.zero_grad(); loss.backward(); opt.step()
 
         with torch.no_grad():

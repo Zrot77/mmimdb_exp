@@ -14,9 +14,10 @@ def stats(v):
     return m, s
 
 
-for missing in ("text", "image", "both"):
+for prefix, ptag in (("tlp", "TLP(L_u+L_c)"), ("tlpLc", "TLP(L_c만)")):
+  for missing in ("text", "image", "both"):
     for K in (1, 5):
-        files = sorted(glob.glob("results/v19_tlp_%s_K%d_s*.json" % (missing, K)))
+        files = sorted(glob.glob("results/v19_%s_%s_K%d_s*.json" % (prefix, missing, K)))
         if not files:
             continue
         agg = defaultdict(lambda: defaultdict(list))
@@ -24,7 +25,7 @@ for missing in ("text", "image", "both"):
             for eta, d in json.load(open(f))["results"].items():
                 for k, v in d.items():
                     agg[eta][k].append(v)
-        print("\n== TLP | missing={} | K={} | seeds={} ==".format(missing, K, len(files)))
+        print("\n== {} | missing={} | K={} | seeds={} ==".format(ptag, missing, K, len(files)))
         print("  {:8s} | miss결손 base→TLP (Δ, ±std)        | all base→TLP    | comp base→TLP".format("η"))
         for eta in sorted(agg):
             a = agg[eta]
