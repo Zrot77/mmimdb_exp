@@ -251,7 +251,11 @@ def train_step(model, px, txt, y, args, teacher=None):
     pi, pt = model.proj(zi, txt)
     m = model.method
 
-    if m in ("zerofill", "gamma", "gamma_moddrop", "moddrop", "b1", "gamma_b1"):
+    if m == "noise":                       # feature-noise(표현 교란): 정렬·분류 전 pi·pt에 가우시안(v9/v11 이식, 학습 시만)
+        pi = pi + args.noise_sigma * torch.randn_like(pi)
+        pt = pt + args.noise_sigma * torch.randn_like(pt)
+
+    if m in ("zerofill", "gamma", "gamma_moddrop", "moddrop", "b1", "gamma_b1", "noise"):
         # moddrop: 분류 입력을 확률적으로 zero (정렬 항은 clean 유지)
         a, b = pi, pt
         if m in ("moddrop", "gamma_moddrop"):
@@ -429,7 +433,7 @@ def main():
     ap.add_argument("--backbone", choices=["clip", "siglip", "stub"], default="clip")
     ap.add_argument("--siglip_name", default=SIGLIP_NAME)
     ap.add_argument("--method", choices=["zerofill", "gamma", "moddrop", "mmin", "kd", "ib",
-                                         "gamma_moddrop", "b1", "gamma_b1"], default="zerofill")
+                                         "gamma_moddrop", "b1", "gamma_b1", "noise"], default="zerofill")
     ap.add_argument("--unfreeze_last", type=int, default=3)
     ap.add_argument("--dim", type=int, default=256)
     # 공통 정렬 스캐폴드
@@ -440,6 +444,7 @@ def main():
     ap.add_argument("--gamma", type=float, default=2.0, help="gamma/ib 브랜치 supervision 가중치")
     ap.add_argument("--moddrop_p", type=float, default=0.3, help="ModDrop 모달 zero 확률")
     ap.add_argument("--lam_b", type=float, default=1.0, help="B1 cross-modal transfer 가중치")
+    ap.add_argument("--noise_sigma", type=float, default=0.3, help="feature-noise σ(정렬 직전 pi·pt 가우시안)")
     ap.add_argument("--cra_blocks", type=int, default=3, help="MMIN CRA 잔차 블록 수")
     ap.add_argument("--lam_rec", type=float, default=1.0, help="MMIN 재구성 가중치")
     ap.add_argument("--kd_w", type=float, default=1.0, help="KD 증류 가중치")
@@ -492,6 +497,7 @@ def main():
         print(">>> model saved", args.save_model)
 
     ev = eval_missing(model, te, device)
+    ev_val = eval_missing(model, va, device)                    # σ·모델 선택용 validation(테스트 미사용 규칙)
     pi_tr, pt_tr, y_tr = extract_proj(model, tr, device)
     pi_te, pt_te, y_te = extract_proj(model, te, device)
     si = multilabel_probe(pi_tr, y_tr, pi_te, y_te, device=device, seed=args.seed)["f1_macro"]
@@ -527,7 +533,7 @@ def main():
     if checks:
         print("--- 재현 체크 ---", checks)
 
-    res = {"method": args.method, "config": vars(args), "eval": ev,
+    res = {"method": args.method, "config": vars(args), "eval": ev, "val": ev_val,
            "suff": {"z_image": si, "z_text": stx}, "usage": usage, "checks": checks}
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
