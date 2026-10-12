@@ -51,7 +51,14 @@ def main():
                c.get("method"), c.get("gamma"), c.get("moddrop_p"), c.get("lam_b"))
         seed = c.get("seed")
         all_seeds.add(seed)
-        m = {reg: r["eval"][reg]["macro"] for reg in ("full", "text", "image", "both") if reg in r.get("eval", {})}
+        ev = r.get("eval", {})
+        m = {}
+        for reg in ("full", "text", "image", "both"):
+            e = ev.get(reg)
+            if isinstance(e, dict) and "macro" in e:
+                m[reg] = e["macro"]
+        if "text" not in m:                       # 이 포맷은 건너뜀(구포맷/비교대상 아님)
+            continue
         if "suff" in r:
             m["suff_img"] = r["suff"].get("z_image"); m["suff_txt"] = r["suff"].get("z_text")
         groups[key][seed] = m
