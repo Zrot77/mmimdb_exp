@@ -1,9 +1,7 @@
-feats/
-results/
 data/
+models/
+results/
+feats*/
 *.pt
-*.tar.gz
-wandb/
-__pycache__/
-*.pyc
-slurm-*.out
+*.log
+*.safetensors
