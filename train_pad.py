@@ -42,8 +42,9 @@ class PadDS(Dataset):
     def __getitem__(self, i):
         from PIL import Image
         img = Image.open(self.ii[self.df[IMG][i]]).convert("RGB")
-        px = self.proc(images=img, return_tensors="pt")["pixel_values"][0]
-        return px, torch.tensor(self.meta[i]), int(self.y[i])
+        px = self.proc(images=img)["pixel_values"][0]              # numpy (3,H,W), 프로세서 내부 텐서변환 우회
+        px = torch.as_tensor(np.asarray(px, dtype=np.float32))
+        return px, torch.as_tensor(self.meta[i], dtype=torch.float32), int(self.y[i])
 
 
 class PadModel(nn.Module):
