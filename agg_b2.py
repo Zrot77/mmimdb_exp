@@ -5,7 +5,8 @@ G1 규칙(사전등록):
       W=image → S=meta → meta_missing / W=meta → S=image → image_missing
   - collapse = suff_W − zerofill(S_missing) macro-F1,  fold별 계산 후 평균(짝지음).
   - 평균 collapse ≥ 0.05 → B3/B4 진행. 미만 → 중단·보고.
-반복=5 fold(fold당 seed 1 고정), 짝지음 CI: df=4, t.975=2.776, ddof=1.
+반복=5 fold(fold당 seed 0 고정 — train_pad.py 실제값, 2026-10-14 정정), 짝지음 CI: df=4, t.975=2.776, ddof=1.
+주의: B2 json의 meta_missing은 구 정의(meta_mlp(입력0)). 판정(image_missing=pi0)과 무관. 이후 정의는 pm=0(train_pad.py 참조).
 실행: python agg_b2.py
 """
 import glob, json, numpy as np
