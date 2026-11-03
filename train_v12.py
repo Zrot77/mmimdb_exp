@@ -474,6 +474,8 @@ def main():
     ap.add_argument("--causal", action="store_true", help="IB/MMIN 인과 probe(suff·분산·중복성) 추가 측정")
     ap.add_argument("--limit", type=int, default=0, help="real 스모크: 각 split 앞 N개만")
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--save_logits", default=None,
+                    help="v2 E9: val·test 로짓(full/text결손/image결손)+라벨 npz. 결과 json 저장 이후 실행 → 기존 결과 불변")
     args = ap.parse_args()
     global T_START
     import time as _t; T_START = _t.time()
@@ -553,6 +555,19 @@ def main():
         pass
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
+
+    if args.save_logits:                                        # v2 E9: json 저장 이후에만 실행 → 위 결과에 영향 없음
+        arr = {}
+        with torch.no_grad():
+            for split, ld in (("val", va), ("test", te)):
+                pi_s, pt_s, y_s = extract_proj(model, ld, device)
+                pi_s, pt_s = pi_s.to(device), pt_s.to(device)
+                for reg, nm in (("full", "full"), ("text", "textmissing"), ("image", "imagemissing")):
+                    arr["%s_%s" % (split, nm)] = infer_logits(model, pi_s, pt_s, reg, device).cpu().numpy()
+                arr[split + "_y"] = y_s.numpy()
+        os.makedirs(os.path.dirname(args.save_logits) or ".", exist_ok=True)
+        np.savez_compressed(args.save_logits, **arr)
+        print(">>> logits saved", args.save_logits)
 
 
 if __name__ == "__main__":
