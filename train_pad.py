@@ -7,6 +7,8 @@
 suff probe = 다항 로지스틱 회귀(train fit, test macro-F1): image_raw(학습전 고정 이미지특징)·meta·학습후(pi,pm).
 평가: macro-F1(주), balanced_acc, macro AUROC(ovr), 클래스별 F1. 반복=5 fold(fold당 seed 0 고정 = B2와 동일, --seed), fold 짝지음.
 γ 선택용: val(최적 epoch 체크포인트)에서도 동일 결손평가를 res['val_eval']에 저장 (테스트로 선택 금지).
+v2 E2(사전등록 ADDENDUM_v2): only_image=분류기 입력 (pi,0), only_meta=(0,pm)로 학습·조기종료(보조 head 없음).
+  천장 R 값: only_meta → eval.image_missing, only_image → eval.meta_missing(투영 0). 기존 방법의 동작·난수 소비는 불변.
 기록: elapsed_sec, gpu, torch/numpy 버전, git commit, checkpoint 경로(--save_model 시 학습가능 파라미터만 저장).
 
 실행: python train_pad.py --data_dir $HOME/Yechan/mmimdb_data/data --fold 0 --method zerofill --out results/thesis_round/B2/pad_zerofill_f0.json
@@ -108,7 +110,7 @@ def main():
     ap.add_argument("--data_dir", required=True)
     ap.add_argument("--splits", default="thesis_round/B0/splits.json")
     ap.add_argument("--fold", type=int, required=True)
-    ap.add_argument("--method", choices=["zerofill", "gamma", "moddrop", "gamma_moddrop"], default="zerofill")
+    ap.add_argument("--method", choices=["zerofill", "gamma", "moddrop", "gamma_moddrop", "only_image", "only_meta"], default="zerofill")
     ap.add_argument("--gamma", type=float, default=8.0)
     ap.add_argument("--moddrop_p", type=float, default=0.3)
     ap.add_argument("--siglip_name", default=SIGLIP)
@@ -163,6 +165,8 @@ def main():
         model.eval(); L, Y = [], []
         for px, mt, yy in loader:
             zi = model.enc_img(px.to(device)); pi, pm = model.proj(zi, mt.to(device).float())
+            if args.method == "only_image": pm = torch.zeros_like(pm)     # v2 E2: 단일모달 천장 모델
+            if args.method == "only_meta": pi = torch.zeros_like(pi)
             L.append(model.classify(pi, pm).cpu()); Y.append(yy)
         return metrics(torch.cat(L), torch.cat(Y))["f1_macro"]
 
@@ -173,6 +177,8 @@ def main():
             px, mt, yy = px.to(device), mt.to(device).float(), yy.to(device)
             zi = model.enc_img(px); pi, pm = model.proj(zi, mt)
             a, b = pi, pm
+            if args.method == "only_image": b = torch.zeros_like(pm)        # v2 E2: 메타를 보지 않고 학습
+            if args.method == "only_meta": a = torch.zeros_like(pi)         # v2 E2: 이미지를 보지 않고 학습
             if args.method in ("moddrop", "gamma_moddrop"):
                 n = pi.size(0)
                 di = (torch.rand(n, 1, device=device) < args.moddrop_p).float()

@@ -251,6 +251,11 @@ def train_step(model, px, txt, y, args, teacher=None):
     pi, pt = model.proj(zi, txt)
     m = model.method
 
+    if m in ("image_only", "text_only"):   # v2 E2(사전등록 ADDENDUM_v2): 단일모달 천장 모델, 다른 모달을 보지 않음 → BCE만
+        a = pi if m == "image_only" else torch.zeros_like(pi)
+        b = pt if m == "text_only" else torch.zeros_like(pt)
+        return F.binary_cross_entropy_with_logits(model.classify(a, b), y)
+
     if m == "noise":                       # feature-noise(표현 교란): 정렬·분류 전 pi·pt에 가우시안(v9/v11 이식, 학습 시만)
         pi = pi + args.noise_sigma * torch.randn_like(pi)
         pt = pt + args.noise_sigma * torch.randn_like(pt)
@@ -333,7 +338,8 @@ def run_training(args, method, tr, va, device, teacher=None, tag=""):
             tot += float(loss.detach())
         print("  epoch {:>2d}  loss={:.4f}".format(ep + 1, tot / max(1, len(tr))))
         if args.early_stop and ((ep + 1) % args.eval_every == 0 or ep + 1 == args.epochs):
-            vs = eval_missing(model, va, device)["full"]["micro"]
+            reg = {"image_only": "text", "text_only": "image"}.get(method, "full")   # v2: 단일모달은 해당 결손 케이스로 조기중단
+            vs = eval_missing(model, va, device)[reg]["micro"]
             if vs > best["val"]:
                 best.update(val=vs, ep=ep + 1,
                             state={k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
@@ -433,7 +439,8 @@ def main():
     ap.add_argument("--backbone", choices=["clip", "siglip", "stub"], default="clip")
     ap.add_argument("--siglip_name", default=SIGLIP_NAME)
     ap.add_argument("--method", choices=["zerofill", "gamma", "moddrop", "mmin", "kd", "ib",
-                                         "gamma_moddrop", "b1", "gamma_b1", "noise"], default="zerofill")
+                                         "gamma_moddrop", "b1", "gamma_b1", "noise", "image_only", "text_only"],
+                    default="zerofill")
     ap.add_argument("--unfreeze_last", type=int, default=3)
     ap.add_argument("--dim", type=int, default=256)
     # 공통 정렬 스캐폴드
@@ -468,6 +475,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="real 스모크: 각 split 앞 N개만")
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
+    global T_START
+    import time as _t; T_START = _t.time()
     if args.smoke:
         args.epochs = 2
     if args.raw_root:                                  # ~ 확장(셸 따옴표 안에서 미확장 방지)
@@ -535,6 +544,13 @@ def main():
 
     res = {"method": args.method, "config": vars(args), "eval": ev, "val": ev_val,
            "suff": {"z_image": si, "z_text": stx}, "usage": usage, "checks": checks}
+    try:                                                         # v2: run 기록(지시서 규칙 5)
+        import subprocess, time as _t
+        res["run"] = {"elapsed_sec": round(_t.time() - T_START, 1),
+                      "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+                      "git_commit": subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()}
+    except Exception:
+        pass
     json.dump(res, open(args.out, "w", encoding="utf-8"), indent=2, ensure_ascii=False, default=float)
     print(">>> saved", args.out)
 
