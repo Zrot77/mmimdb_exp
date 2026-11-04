@@ -30,6 +30,15 @@ E9 (MM-IMDb 재보정, zf·γ8은 로짓 저장을 위해 같은 설정으로 �
   K1 로짓으로 다시 계산한 F1@0.5(full/text/image) = 결과 json 값 (|차| ≤ 1e-6; 어긋나면 경고)
   K2 같은 seed의 기존 결과 json과의 재현 차(zf·γ8, text/image 결손). |차| > 0.001이면 경고(판정은 진행, 보고에 명시)
   K3 모든 로짓 파일의 val·test 라벨이 서로 같음(다르면 중단)
+[사후 추가 — CLIP 결과 열람 후 추가, 2026-11-04. 위 고정 규칙의 판정은 바꾸지 않음]
+F  full(결손 없음) 조건 기술 통계: zf·γ8의 F1@0.5, F1@재보정(val full 출력으로 같은 방식 기준값), AUPRC.
+   γ8 − zf (F1@0.5), γ8+재보정 − zf+재보정, AUPRC γ8 − zf 의 CI와 용어(개선/구분 불가/악화)를 보고하되 '사후 기술'로 표시.
+   목적: 기존 'γ8이 full에서도 높다(.509 vs .462)'가 기준값 효과인지 순위 효과인지 구분.
+[수정 규칙 — 사후 발견 결함, 2026-11-04] 고정 규칙의 확률 격자 t∈{0.01,…,0.99}는 (1) 최적 기준값이 0.01 밖이면 잘리고
+   (2) 낮은 확률 구간 해상도가 거칠어(0.02→0.03 = 로짓 0.4) 로짓이 크게 이동한 모델의 재보정을 과소평가한다.
+   음성 대조(순위 동일, 로짓만 −2 이동한 두 모델)에서 격자 규칙은 대칭 재보정 차 +0.009 '개선'을 거짓으로 냈다.
+   → 라벨별 val 로짓 값 자체에서 F1 최대 기준값을 정확 탐색(fit_thr_exact; 동률은 로짓 0에 가장 가까운 값)하는 규칙으로
+   H1~H3를 반복해 나란히 보고한다. 고정 규칙 결과는 삭제하지 않는다. 각 모델의 '격자 끝 라벨 수'(절단 진단)도 출력.
 알려진 한계: val은 조기종료에도 쓰였으므로 재보정 이득은 약간 낙관적일 수 있음(모든 모델 동일 조건). n=3이라 검정력 낮음.
 """
 import glob, json, os, sys
@@ -77,6 +86,32 @@ def fit_thr(yv, pv):
 def f1_recal(yv, lv, yt, lt):
     thr = fit_thr(yv, sig(lv))
     return macro_f1(yt, sig(lt) >= thr[None, :])
+
+
+def n_edge(yv, lv):
+    """격자 기준값이 양 끝(0.01 또는 0.99)에 걸린 라벨 수 — 격자 절단 진단."""
+    t = fit_thr(yv, sig(lv)); return int(((t <= 0.01 + 1e-9) | (t >= 0.99 - 1e-9)).sum())
+
+
+def fit_thr_exact(yv, lv):
+    """[수정 규칙] 라벨별 val F1 최대 기준값을 로짓 값 자체에서 정확 탐색(격자 없음 → 절단·해상도 문제 없음).
+    동률 블록 끝에서만 자르고, F1 동률이면 로짓 0(=확률 0.5)에 가장 가까운 값. val 양성 0개 라벨은 로짓 0."""
+    yv = yv.astype(bool); L = yv.shape[1]; thr = np.zeros(L)
+    for j in range(L):
+        y, sc = yv[:, j], np.asarray(lv[:, j], np.float64); P = y.sum()
+        if P == 0:
+            continue
+        o = np.argsort(-sc, kind="mergesort"); ss, yy = sc[o], y[o]
+        tp = np.cumsum(yy); k = np.arange(1, len(ss) + 1); f = 2 * tp / (k + P)
+        cut = np.r_[ss[:-1] > ss[1:], True]
+        idx = np.where(cut)[0]; fb = f[idx]; cand = idx[fb >= fb.max() - 1e-12]
+        thr[j] = ss[cand[np.argmin(np.abs(ss[cand]))]]
+    return thr
+
+
+def f1_recal_exact(yv, lv, yt, lt):
+    thr = fit_thr_exact(yv, lv)
+    return macro_f1(yt, np.asarray(lt, np.float64) >= thr[None, :])
 
 
 def auprc(y, logit):
@@ -188,13 +223,16 @@ def analyze(root, bb):
                 yv, yt = z["val_y"], z["test_y"]
                 M[(k, s)] = {"f1": f1_at05(yt, z["test_" + nk]),
                              "f1r": f1_recal(yv, z["val_" + nk], yt, z["test_" + nk]),
+                             "f1x": f1_recal_exact(yv, z["val_" + nk], yt, z["test_" + nk]),
+                             "edge": n_edge(yv, z["val_" + nk]),
                              "ap": auprc(yt, z["test_" + nk]), "full": f1_at05(yt, z["test_full"])}
         for k, lab in ((rkey, "R"), ("zf", "zf"), ("g8", "γ8")):
             if avail[k]:
                 A = lambda m: np.mean([M[(k, s)][m] for s in avail[k]])
-                print("  %-3s (n=%d)  F1@0.5 %.4f | F1@재보정 %.4f | AUPRC %.4f | full F1 %s" % (
-                    lab, len(avail[k]), A("f1"), A("f1r"), A("ap"), "-" if k == rkey else "%.4f" % A("full")))
-        cell = {"means": {k: {m: float(np.mean([M[(k, s)][m] for s in avail[k]])) for m in ("f1", "f1r", "ap", "full")}
+                print("  %-3s (n=%d)  F1@0.5 %.4f | F1@재보정 %.4f | F1@재보정(정확) %.4f | AUPRC %.4f | full F1 %s | 격자 끝 라벨 %s" % (
+                    lab, len(avail[k]), A("f1"), A("f1r"), A("f1x"), A("ap"), "-" if k == rkey else "%.4f" % A("full"),
+                    "/".join(str(M[(k, s)]["edge"]) for s in avail[k])))
+        cell = {"means": {k: {m: float(np.mean([M[(k, s)][m] for s in avail[k]])) for m in ("f1", "f1r", "f1x", "ap", "full")}
                           for k in (rkey, "zf", "g8") if avail[k]}}
         both = lambda a, b: [s for s in SEEDS if (a, s) in M and (b, s) in M]
         D = lambda a, ma, b, mb, ss: np.array([M[(a, s)][ma] - M[(b, s)][mb] for s in ss])
@@ -228,6 +266,7 @@ def analyze(root, bb):
                     print("  H2  해당 없음(원붕괴 %+.4f < %.2f) | 참고 AUPRC(R)−AUPRC(zf) %+.4f [%+.4f,%+.4f]" % (raw.mean(), THR, *ci(apg)))
                     cell["H2"] = None
             gs = both("g8", "zf")
+            lab = {"개선": "처방이 재보정 이상", "구분 불가": "재보정과 구분 불가", "악화": "재보정 우위"}
             if len(gs) == 3:
                 lab = {"개선": "처방이 재보정 이상", "구분 불가": "재보정과 구분 불가", "악화": "재보정 우위"}
                 h3a = ci(D("g8", "f1", "zf", "f1r", gs)); h3b = ci(D("g8", "f1r", "zf", "f1r", gs)); ref_ = ci(D("g8", "f1", "zf", "f1", gs))
@@ -237,9 +276,47 @@ def analyze(root, bb):
                 print("  참고 γ8 − zf (F1@0.5) %+.4f [%+.4f,%+.4f] %s | AUPRC γ8 − zf %+.4f [%+.4f,%+.4f] %s" % (
                     *ref_, verdict(ref_[1], ref_[2]), *apd, verdict(apd[1], apd[2])))
                 cell["H3"] = {"g8_vs_zfr": h3a, "g8r_vs_zfr": h3b, "g8_vs_zf": ref_, "ap_g8_vs_zf": apd}
+            # 수정 규칙(정확 탐색) — 같은 H1~H3를 F1@재보정(정확)으로 반복
+            x1 = ci(D("zf", "f1x", "zf", "f1", zs)); X = {"H1": x1}
+            line = "  [수정 규칙: 정확 탐색] H1 %+.4f [%+.4f,%+.4f] %s" % (*x1, verdict(x1[1], x1[2]))
+            if len(ss) == 3 and D(rkey, "f1", "zf", "f1", ss).mean() >= THR:
+                xr = D(rkey, "f1x", "zf", "f1x", ss); raw_ = D(rkey, "f1", "zf", "f1", ss)
+                X["resid"] = ci(xr); X["thr_share"] = float(1 - xr.mean() / raw_.mean())
+                line += " | 잔여 붕괴 %+.4f [%+.4f,%+.4f], 기준값 층 비율 %.2f" % (*X["resid"], X["thr_share"])
+            if len(gs) == 3:
+                xa = ci(D("g8", "f1", "zf", "f1x", gs)); xb = ci(D("g8", "f1x", "zf", "f1x", gs)); X.update(g8_vs_zfr=xa, g8r_vs_zfr=xb)
+                line += "\n      γ8 − (zf+재보정) %+.4f [%+.4f,%+.4f] → %s | γ8+재보정 − (zf+재보정) %+.4f [%+.4f,%+.4f] → %s" % (
+                    *xa, lab[verdict(xa[1], xa[2])], *xb, lab[verdict(xb[1], xb[2])])
+            print(line); cell["exact"] = X
         else:
             print("  E9  해당 없음(zf run 부족)")
         res["cells"][reg] = cell
+
+    # F (사후 추가 · 기술 통계): full 조건
+    print("\n" + "-" * 100); print("[full 조건] (사후 추가 · 기술 통계 — 사전 고정 판정 아님)"); print("-" * 100)
+    fs = [s for s in SEEDS if ("zf", s) in runs and ("g8", s) in runs]
+    if len(fs) == 3:
+        Fm = {}
+        for k in ("zf", "g8"):
+            for s in fs:
+                z = runs[(k, s)][1]
+                Fm[(k, s)] = {"f1": f1_at05(z["test_y"], z["test_full"]),
+                              "f1r": f1_recal(z["val_y"], z["val_full"], z["test_y"], z["test_full"]),
+                              "f1x": f1_recal_exact(z["val_y"], z["val_full"], z["test_y"], z["test_full"]),
+                              "ap": auprc(z["test_y"], z["test_full"])}
+        for k, lab in (("zf", "zf"), ("g8", "γ8")):
+            A = lambda m: np.mean([Fm[(k, s)][m] for s in fs])
+            print("  %-3s (n=3)  F1@0.5 %.4f | F1@재보정 %.4f | F1@재보정(정확) %.4f | AUPRC %.4f" % (lab, A("f1"), A("f1r"), A("f1x"), A("ap")))
+        Df = lambda m: np.array([Fm[("g8", s)][m] - Fm[("zf", s)][m] for s in fs])
+        a, b, c, x = ci(Df("f1")), ci(Df("f1r")), ci(Df("ap")), ci(Df("f1x"))
+        print("  γ8 − zf (F1@0.5) %+.4f [%+.4f,%+.4f] %s | γ8+재보정 − zf+재보정 %+.4f [%+.4f,%+.4f] %s | AUPRC γ8 − zf %+.4f [%+.4f,%+.4f] %s" % (
+            *a, verdict(a[1], a[2]), *b, verdict(b[1], b[2]), *c, verdict(c[1], c[2])))
+        print("  [정확 탐색] γ8+재보정 − zf+재보정 %+.4f [%+.4f,%+.4f] %s" % (*x, verdict(x[1], x[2])))
+        res["full_posthoc"] = {"means": {k: {m: float(np.mean([Fm[(k, s)][m] for s in fs])) for m in ("f1", "f1r", "f1x", "ap")} for k in ("zf", "g8")},
+                               "g8_vs_zf": a, "g8r_vs_zfr": b, "ap_g8_vs_zf": c, "g8x_vs_zfx": x}
+    else:
+        print("  해당 없음(zf 또는 γ8 run 부족)")
+        res["full_posthoc"] = None
     return res
 
 
@@ -290,8 +367,8 @@ def selftest():
         # zf: text 결손 = R과 같은 순위, 로짓 −4 이동(순수 기준값 붕괴 → 양성 대조)
         #     image 결손 = R의 val 최적 기준값을 0.5로 옮긴 로짓(이미 최적 → H1 음성 대조, 붕괴 없음)
         thr = fit_thr(yv, sig(G["Rt"][0])); sh = -np.log(thr / (1 - thr))
-        write("zerofill", s, {"full": full[0], "textmissing": G["Rv"][0] - 4, "imagemissing": G["Rt"][0] + sh},
-              {"full": full[1], "textmissing": G["Rv"][1] - 4, "imagemissing": G["Rt"][1] + sh},
+        write("zerofill", s, {"full": full[0] - 2, "textmissing": G["Rv"][0] - 4, "imagemissing": G["Rt"][0] + sh},
+              {"full": full[1] - 2, "textmissing": G["Rv"][1] - 4, "imagemissing": G["Rt"][1] + sh},
               mods={"full": 0.01} if s == 2 else None, orig=("zerofill", 2.0, 0.0 if s != 3 else 0.02))
         # γ8: text 결손 = 약한 신호(순위 붕괴) → 재보정을 해도 R에 못 미침
         write("gamma_g8.0", s, {"full": full[0], "textmissing": G["weak"][0], "imagemissing": G["Rt"][0]},
@@ -301,12 +378,15 @@ def selftest():
     print("      text 결손: 원붕괴 큼, H1 개선, 잔여 붕괴 ≈ 0, 기준값 층 비율 ≈ 1, AUPRC 차 ≈ 0 (순수 기준값 붕괴),")
     print("                 H3 γ8(순위 붕괴)은 재보정 우위, AUPRC γ8 − zf 악화")
     print("      image 결손: E2 붕괴 없음(R과 zf 순위 같고 zf는 이미 최적 기준값), H1 ≈ 0 (구분 불가 또는 아주 작음)")
+    print("      full(사후): zf = γ8 로짓 − 2 → F1@0.5 차 있음(γ8 > zf), 대칭 재보정 차 ≈ 0, AUPRC 차 ≈ 0")
     r = analyze(root, "clip")
     t, i = r["cells"]["text"], r["cells"]["image"]
     ok = [len(r["K1_bad"]) == 1, sum(abs(x["d_text"]) > 1e-3 for x in r["K2"]) == 1,
           t["H2"] is not None and abs(t["H2"]["resid"][0]) < 0.01 and t["H2"]["thr_share"] > 0.9 and abs(t["H2"]["ap_gap"][0]) < 1e-4,
           t["H1"][1] > 0, t["H3"]["g8_vs_zfr"][2] < 0, t["H3"]["ap_g8_vs_zf"][2] < 0,
-          not i["E2"]["R_has"], abs(i["H1"][0]) < 0.01]
+          not i["E2"]["R_has"], abs(i["H1"][0]) < 0.01,
+          r["full_posthoc"]["g8_vs_zf"][1] > 0, abs(r["full_posthoc"]["ap_g8_vs_zf"][0]) < 1e-4,
+          abs(r["full_posthoc"]["g8x_vs_zfx"][0]) < 1e-9, abs(t["exact"]["resid"][0]) < 1e-9, abs(t["exact"]["H1"][0] - t["H1"][0]) > 0]
     import shutil; shutil.rmtree(root, ignore_errors=True)
     print("\n자체 시험 판정:", "모두 통과" if all(ok) else "★실패 %s" % ok)
     return all(ok)
