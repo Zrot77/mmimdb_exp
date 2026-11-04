@@ -95,4 +95,6 @@ for m in METHODS:
             print("  (결과·로짓 모두 있음, 건너뜀)"); continue
         rc = subprocess.call(cmd)
         print("  → 종료코드 %d" % rc, flush=True)
+        if rc != 0:   # 실패(GPU 점유 등) 시 다음 run으로 넘어가 헛돌지 않도록 즉시 중단 → 원인 해결 후 같은 명령으로 재개
+            sys.exit("★ run 실패(종료코드 %d) → 실행기 중단. 원인 확인 후 같은 명령으로 다시 실행하면 완료된 run은 건너뜀" % rc)
 print("\n=== ALL DONE (V2 MM-IMDb %s %s%s) ===" % (BB, ",".join(METHODS), " DRY" if DRY else ""))
