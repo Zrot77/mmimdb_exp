@@ -37,7 +37,8 @@ REGS = (("text", "textmissing", "R_image_only"), ("image", "imagemissing", "R_te
 
 
 def cfg_diff(a, b):
-    return {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if k not in IGN and a.get(k) != b.get(k)}
+    """두 config 모두에 있는 키만 비교(새 run에는 이후 추가된 인자 키가 더 있어 합집합 비교 시 기존 run이 전부 '설정 다름'이 됨)."""
+    return {k: (a.get(k), b.get(k)) for k in set(a) & set(b) if k not in IGN and a.get(k) != b.get(k)}
 
 
 def analyze(root, bb):
@@ -180,7 +181,8 @@ def selftest():
                         mods={"full": 0.01} if s == 2 else None)
         # 기존 결과: 같은 설정(s3만 일부러 text +0.02) + p가 다른 run(대조 제외되어야 함)
         o = json.loads(json.dumps(ev)); o["text"]["macro"] += (0.02 if s == 3 else 0.0)
-        json.dump({"config": dict(cfg, out="old.json", save_logits=None, workers=2), "eval": o},
+        oc = dict(cfg, out="old.json", save_logits=None, workers=2); oc.pop("limit")   # 이전 버전엔 limit 키 없음
+        json.dump({"config": oc, "eval": o},
                   open(os.path.join(root, "results", "old_md_s%d.json" % s), "w"))
         json.dump({"config": dict(cfg, moddrop_p=0.5), "eval": ev}, open(os.path.join(root, "results", "old_md_p05_s%d.json" % s), "w"))
     print("기대: K1 경고 1건(s2 full), K2 재현 경고 1건(s3), p0.5 run 3개 '대조 제외'")
