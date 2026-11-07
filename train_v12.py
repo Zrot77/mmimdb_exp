@@ -75,6 +75,8 @@ class V12Model(nn.Module):
         self.method = method
         self.backbone = backbone
         self.dim = dim
+        # 주의: layers[-0:]는 리스트 전체 → unfreeze_last=0이면 '전부 동결'이 아니라 '전부 학습'이 됨. 의도와 반대이므로 금지
+        assert unfreeze_last >= 1, "unfreeze_last는 1 이상이어야 함(0은 layers[-0:] = 전체 블록 학습이 되어 의도와 반대)"
         txt_dim = 512                                   # 텍스트 앵커 = CLIP 텍스트(512) 유지(강한 채로, 이미지만 교체)
         if backbone == "clip":
             from transformers import CLIPModel
@@ -564,6 +566,8 @@ def main():
                 pi_s, pt_s = pi_s.to(device), pt_s.to(device)
                 for reg, nm in (("full", "full"), ("text", "textmissing"), ("image", "imagemissing")):
                     arr["%s_%s" % (split, nm)] = infer_logits(model, pi_s, pt_s, reg, device).cpu().numpy()
+                arr[split + "_headi"] = model.head_i(pi_s).cpu().numpy()   # 보조 분류기(이미지 단독 입력) — γ 계열에서만 학습됨
+                arr[split + "_headt"] = model.head_t(pt_s).cpu().numpy()   # 보조 분류기(텍스트 단독 입력)
                 arr[split + "_y"] = y_s.numpy()
         os.makedirs(os.path.dirname(args.save_logits) or ".", exist_ok=True)
         np.savez_compressed(args.save_logits, **arr)
