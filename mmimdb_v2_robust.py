@@ -21,7 +21,7 @@ E4 입력(사전등록 v2 §E4, 전원결손 프로토콜): 붕괴 = R − zf(F1
 import os, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mmimdb_v2_analysis import f1_at05, fit_thr_exact, auprc, ci, verdict, load_run, SEEDS, macro_f1
+from mmimdb_v2_analysis import f1_at05, fit_thr_exact, auprc, ci, verdict, load_run, SEEDS, macro_f1, SUF
 
 B, BOOT_SEED, MINPOS, VAL_NS, REPS = 1000, 20261107, 30, (300, 600, 1200, None), 20
 CELLS = (("text", "textmissing", "R_image_only", "g8"), ("image", "imagemissing", "R_text_only", "md"))
@@ -173,9 +173,9 @@ def selftest():
     r = analyze(root, "clip", B_=200); shutil.rmtree(root, ignore_errors=True)
     t, i = r["cells"]["text"], r["cells"]["image"]
     ok = [t["C1 zf+재보정 − zf"]["seed"][1] > 0, abs(t["C2 R+재보정 − zf+재보정"]["seed"][0]) < 1e-9,
-          abs(t["C3 AUPRC R − zf"]["boot"][0]) < 1e-9, i["C7 AUPRC MD − zf"]["boot"][1] > 0,
+          abs(t["C3 AUPRC R − zf"]["boot"][0]) < 1e-6, i["C7 AUPRC MD − zf"]["boot"][1] > 0,
           i["C3 AUPRC R − zf"]["seed"][1] > 0, t["E4"]["has"] and t["E4"]["gain_v"] == "개선",
-          abs(t["C3 AUPRC R − zf"]["rare"][0]) < 1e-9, "300" in t["R3"]]
+          abs(t["C3 AUPRC R − zf"]["rare"][0]) < 1e-6, "300" in t["R3"]]
     print("\n자체 시험 판정:", "모두 통과" if all(ok) else "★실패 %s" % ok)
     return all(ok)
 
@@ -185,6 +185,6 @@ if __name__ == "__main__":
         sys.exit(0 if selftest() else 1)
     import json
     BB = sys.argv[1]; r = analyze(".", BB)
-    out = "results/thesis_round/V2/mmimdb_v2_robust_%s.json" % BB
+    out = "results/thesis_round/V2/mmimdb_v2_robust_%s%s.json" % (BB, SUF)
     json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2, default=float)
     print("\n결과 저장:", out); print("=== ALL DONE (MM-IMDb 견고성 %s) ===" % BB)

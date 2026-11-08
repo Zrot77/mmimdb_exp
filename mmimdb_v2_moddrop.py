@@ -30,7 +30,7 @@
 import glob, json, os, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3
+from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3, NDF, SUF
 
 IGN = {"out", "save_preds", "save_model", "save_logits", "workers", "causal", "smoke", "lam_b"}
 REGS = (("text", "textmissing", "R_image_only"), ("image", "imagemissing", "R_text_only"), ("full", "full", None))
@@ -50,11 +50,11 @@ def analyze(root, bb):
         for s in SEEDS:
             r = load_run(os.path.join(d, "%s_%s_s%d" % (bb, m, s)))
             (missing.append("%s_%s_s%d" % (bb, m, s)) if r is None else runs.__setitem__((key, s), r))
-    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E9-MD (ModDrop) | seed %s, n=3, df=2, t=%.3f" % (bb, SEEDS, T_N3)); print("=" * 100)
+    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E9-MD (ModDrop) | seed %s, %s, t=%.3f" % (bb, SEEDS, NDF, T_N3)); print("=" * 100)
     if missing:
         print("★ 없는 run: %s" % ", ".join(missing))
     if any(("md", s) not in runs or ("zf", s) not in runs for s in SEEDS):
-        print("★ md 또는 zf run이 3개가 아님 → 분석 중단"); return None
+        print("★ md 또는 zf run이 seed 수(%d)만큼 없음 → 분석 중단" % len(SEEDS)); return None
     ref = None
     for (k, s), (j, z) in runs.items():
         cur = (z["val_y"], z["test_y"])
@@ -189,7 +189,7 @@ def selftest():
     print("      image: H4b·H4c 개선, 메움 비율 ≈ 1 → 'ModDrop이 순위 층 붕괴를 메움' | text: H4a·b·c 정확히 0")
     r = analyze(root, "siglip"); shutil.rmtree(root, ignore_errors=True)
     im, tx = r["cells"]["image"], r["cells"]["text"]
-    ok = [len(r["K1_bad"]) == 1, sum(abs(x["d_text"]) > 1e-3 for x in r["K2"]) == 1, len(r["K2"]) == 3,
+    ok = [len(r["K1_bad"]) == 1, sum(abs(x["d_text"]) > 1e-3 for x in r["K2"]) == 1, len(r["K2"]) == len(SEEDS),
           im["H4b"][1] > 0, im["H4c"][1] > 0, im["ratio"] is not None and 0.9 < im["ratio"] < 1.1,
           im["verdict"] == "ModDrop이 순위 층 붕괴를 메움",
           all(abs(tx[h][0]) < 1e-12 for h in ("H4a", "H4b", "H4c")), im["H4d"]["ap"][1] > 0]
@@ -203,7 +203,7 @@ if __name__ == "__main__":
     BB = sys.argv[1]
     r = analyze(".", BB)
     if r is not None:
-        out = "results/thesis_round/V2/mmimdb_v2_moddrop_%s.json" % BB
+        out = "results/thesis_round/V2/mmimdb_v2_moddrop_%s%s.json" % (BB, SUF)
         json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         print("\n결과 저장:", out)
     print("=== ALL DONE (MM-IMDb E9-MD %s) ===" % BB)

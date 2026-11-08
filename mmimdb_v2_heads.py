@@ -24,7 +24,7 @@
 import os, sys, json
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3
+from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3, NDF, SUF
 
 CELLS = (("text", "textmissing", "headi", "R_image_only"), ("image", "imagemissing", "headt", "R_text_only"))
 
@@ -34,12 +34,16 @@ def analyze(root, bb):
     names = {"R_image_only": ("E2_mmimdb", "image_only"), "R_text_only": ("E2_mmimdb", "text_only"), "zf": ("E9_mmimdb", "zerofill"),
              "md": ("E9_mmimdb", "moddrop"), "g8_old": ("E9_mmimdb", "gamma_g8.0"), "gm_old": ("E9_mmimdb", "gamma_moddrop_g8.0"),
              "g8": ("E9H_mmimdb", "gamma_g8.0"), "gm": ("E9H_mmimdb", "gamma_moddrop_g8.0")}
-    runs, missing = {}, []
+    runs, missing, same_file = {}, [], set()
     for k, (d, m) in names.items():
         for s in SEEDS:
             r = load_run(os.path.join(v2, d, "%s_%s_s%d" % (bb, m, s)))
+            if r is None and d == "E9H_mmimdb":      # seed 확장 run은 E9_mmimdb에 보조 분류기 출력과 함께 저장됨
+                r2 = load_run(os.path.join(v2, "E9_mmimdb", "%s_%s_s%d" % (bb, m, s)))
+                if r2 is not None and "test_headi" in r2[1]:
+                    r = r2; same_file.add((k, s))
             (missing.append("%s/%s_%s_s%d" % (d, bb, m, s)) if r is None else runs.__setitem__((k, s), r))
-    print("=" * 100); print("MM-IMDb [%s] E9-H 보조 분류기 대 융합 분류기 | seed %s, n=3, t=%.3f" % (bb, SEEDS, T_N3)); print("=" * 100)
+    print("=" * 100); print("MM-IMDb [%s] E9-H 보조 분류기 대 융합 분류기 | seed %s, %s, t=%.3f" % (bb, SEEDS, NDF, T_N3)); print("=" * 100)
     if missing:
         print("★ 없는 run: %s" % ", ".join(missing))
     need = ("R_image_only", "R_text_only", "zf", "md", "g8")
@@ -58,7 +62,9 @@ def analyze(root, bb):
             zn = runs[(new, s)][1]
             if "test_headi" not in zn or "test_headt" not in zn:
                 sys.exit("★ %s s%d에 보조 분류기 출력이 없음(구버전 train_v12?) → 중단" % (new, s))
-            if (old, s) in runs:
+            if (new, s) in same_file:
+                print("[K0] %s s%d: 기존 E9 run 자체가 보조 분류기 출력을 가진 새 seed run → 대조 해당 없음" % (new, s))
+            elif (old, s) in runs:
                 zo = runs[(old, s)][1]
                 dmax = max(float(np.abs(zn[k].astype(np.float64) - zo[k].astype(np.float64)).max())
                            for k in zo if k.endswith(("full", "textmissing", "imagemissing")))
@@ -154,6 +160,6 @@ if __name__ == "__main__":
         sys.exit(0 if selftest() else 1)
     BB = sys.argv[1]; r = analyze(".", BB)
     if r is not None:
-        out = "results/thesis_round/V2/mmimdb_v2_heads_%s.json" % BB
+        out = "results/thesis_round/V2/mmimdb_v2_heads_%s%s.json" % (BB, SUF)
         json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2, default=float); print("\n결과 저장:", out)
     print("=== ALL DONE (MM-IMDb E9-H %s) ===" % BB)

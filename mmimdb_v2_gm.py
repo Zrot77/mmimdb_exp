@@ -29,7 +29,7 @@
 import glob, json, os, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3
+from mmimdb_v2_analysis import f1_at05, f1_recal_exact, auprc, ci, verdict, load_run, SEEDS, T_N3, NDF, SUF
 
 IGN = {"out", "save_preds", "save_model", "save_logits", "workers", "causal", "smoke", "lam_b"}
 REGS = (("text", "textmissing", "R_image_only"), ("image", "imagemissing", "R_text_only"), ("full", "full", None))
@@ -49,7 +49,7 @@ def analyze(root, bb):
         for s in SEEDS:
             r = load_run(os.path.join(d, "%s_%s_s%d" % (bb, m, s)))
             (missing.append("%s_%s_s%d" % (bb, m, s)) if r is None else runs.__setitem__((key, s), r))
-    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E9-GM (γ8+ModDrop) | seed %s, n=3, df=2, t=%.3f" % (bb, SEEDS, T_N3)); print("=" * 100)
+    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E9-GM (γ8+ModDrop) | seed %s, %s, t=%.3f" % (bb, SEEDS, NDF, T_N3)); print("=" * 100)
     if missing:
         print("★ 없는 run: %s" % ", ".join(missing))
     need = ("zf", "g8", "md", "gm", "R_image_only", "R_text_only")
@@ -175,7 +175,7 @@ def selftest():
                       open(os.path.join(root, "results/thesis_round/A1", "a1_gm_s%d.json" % s), "w"))
         r = analyze(root, "siglip"); shutil.rmtree(root, ignore_errors=True)
         exp = "GM이 두 방향을 함께 다룸" if case == "pos" else "한 방향만 유지"
-        out += [r["verdict"] == exp, len(r["K2"]) == 3 and all(abs(x["d_text"]) < 1e-12 for x in r["K2"])]
+        out += [r["verdict"] == exp, len(r["K2"]) == len(SEEDS) and all(abs(x["d_text"]) < 1e-12 for x in r["K2"])]
         print("\n[자체 시험 %s] 기대 '%s' → 얻음 '%s'" % (case, exp, r["verdict"]))
     print("\n자체 시험 판정:", "모두 통과" if all(out) else "★실패 %s" % out)
     return all(out)
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     BB = sys.argv[1]
     r = analyze(".", BB)
     if r is not None:
-        out = "results/thesis_round/V2/mmimdb_v2_gm_%s.json" % BB
+        out = "results/thesis_round/V2/mmimdb_v2_gm_%s%s.json" % (BB, SUF)
         json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         print("\n결과 저장:", out)
     print("=== ALL DONE (MM-IMDb E9-GM %s) ===" % BB)

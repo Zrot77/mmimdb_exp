@@ -39,13 +39,20 @@ F  full(결손 없음) 조건 기술 통계: zf·γ8의 F1@0.5, F1@재보정(val
    음성 대조(순위 동일, 로짓만 −2 이동한 두 모델)에서 격자 규칙은 대칭 재보정 차 +0.009 '개선'을 거짓으로 냈다.
    → 라벨별 val 로짓 값 자체에서 F1 최대 기준값을 정확 탐색(fit_thr_exact; 동률은 로짓 0에 가장 가까운 값)하는 규칙으로
    H1~H3를 반복해 나란히 보고한다. 고정 규칙 결과는 삭제하지 않는다. 각 모델의 '격자 끝 라벨 수'(절단 진단)도 출력.
+[seed 확장 — 2026-11-08, 새 seed(4·5) 결과 열람 전 고정] 환경변수 V2_SEEDS=1,2,3,4,5 로 이 스크립트와
+   mmimdb_v2_moddrop/gm/heads/robust를 다시 실행해 n=5(df=4, t=2.776) 결과를 보고한다. 사전 판정은 n=3 결과를 유지하고,
+   n=5에서 판정 용어가 달라지면 'seed 확장 시 변경'으로 명시한다. 새 seed는 seed 1~3과 같은 설정(seed만 변경)으로 학습.
 알려진 한계: val은 조기종료에도 쓰였으므로 재보정 이득은 약간 낙관적일 수 있음(모든 모델 동일 조건). n=3이라 검정력 낮음.
 """
 import glob, json, os, sys
 import numpy as np
 
-T_N3, THR = 4.303, 0.05
-SEEDS = [1, 2, 3]
+THR = 0.05
+# seed 목록: 기본 1·2·3(사전 판정). 환경변수 V2_SEEDS=1,2,3,4,5 로 seed 확장 재분석(보고용) — t는 n에 맞춰 바뀜
+SEEDS = [int(x) for x in os.environ.get("V2_SEEDS", "1,2,3").split(",")]
+T_N3 = {2: 12.706, 3: 4.303, 4: 3.182, 5: 2.776, 6: 2.571, 7: 2.447}[len(SEEDS)]   # 이름은 기존 호환용(실제 t(0.975, n−1))
+NDF = "n=%d, df=%d" % (len(SEEDS), len(SEEDS) - 1)
+SUF = "" if SEEDS == [1, 2, 3] else "_seeds" + "".join(map(str, SEEDS))   # seed 확장 결과는 기존 결과 파일을 덮지 않도록 이름을 달리함
 GRID = np.round(np.arange(1, 100) / 100.0, 2)
 # L(선형 천장) 문서값: A0 canonical_numbers.csv 'raw_suff_CLIPimg_SigLIPimg_etc' (CLIP img .407 / CLIP txt .488 / SigLIP img .545)
 # SigLIP 파이프라인의 텍스트는 CLIP 텍스트 앵커 → 텍스트 raw suff는 CLIP txt 값을 공유
@@ -168,7 +175,7 @@ def analyze(root, bb):
                 missing.append("%s_%s_s%d" % (bb, m, s))
             else:
                 runs[(key, s)] = r
-    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E2·E9 분석 | seed %s, n=3, df=2, t=%.3f" % (bb, SEEDS, T_N3)); print("=" * 100)
+    print("=" * 100); print("추가 실험 v2 — MM-IMDb [%s] E2·E9 분석 | seed %s, %s, t=%.3f" % (bb, SEEDS, NDF, T_N3)); print("=" * 100)
     if missing:
         print("★ 없는 run(해당 셀 제외): %s" % ", ".join(missing))
 
@@ -239,7 +246,7 @@ def analyze(root, bb):
 
         # E2
         ss = both(rkey, "zf")
-        if len(ss) == 3:
+        if len(ss) == len(SEEDS):
             rc = D(rkey, "f1", "zf", "f1", ss); rcm = float(rc.mean())
             lc = L_RAW[bb][reg] - float(np.mean([M[("zf", s)]["f1"] for s in ss]))
             hr, hl = rcm >= THR, lc >= THR
@@ -251,11 +258,11 @@ def analyze(root, bb):
             print("  E2  해당 없음(R 또는 zf run 부족)")
         # E9
         zs = [s for s in SEEDS if ("zf", s) in M]
-        if len(zs) == 3:
+        if len(zs) == len(SEEDS):
             h1 = ci(D("zf", "f1r", "zf", "f1", zs))
             print("  H1  zf+재보정 − zf %+.4f [%+.4f,%+.4f] → %s" % (*h1, verdict(h1[1], h1[2])))
             cell["H1"] = h1
-            if len(ss) == 3:
+            if len(ss) == len(SEEDS):
                 raw = D(rkey, "f1", "zf", "f1", ss); resid = D(rkey, "f1r", "zf", "f1r", ss); apg = D(rkey, "ap", "zf", "ap", ss)
                 if raw.mean() >= THR:
                     share = 1 - resid.mean() / raw.mean()
@@ -267,7 +274,7 @@ def analyze(root, bb):
                     cell["H2"] = None
             gs = both("g8", "zf")
             lab = {"개선": "처방이 재보정 이상", "구분 불가": "재보정과 구분 불가", "악화": "재보정 우위"}
-            if len(gs) == 3:
+            if len(gs) == len(SEEDS):
                 lab = {"개선": "처방이 재보정 이상", "구분 불가": "재보정과 구분 불가", "악화": "재보정 우위"}
                 h3a = ci(D("g8", "f1", "zf", "f1r", gs)); h3b = ci(D("g8", "f1r", "zf", "f1r", gs)); ref_ = ci(D("g8", "f1", "zf", "f1", gs))
                 apd = ci(D("g8", "ap", "zf", "ap", gs))
@@ -279,11 +286,11 @@ def analyze(root, bb):
             # 수정 규칙(정확 탐색) — 같은 H1~H3를 F1@재보정(정확)으로 반복
             x1 = ci(D("zf", "f1x", "zf", "f1", zs)); X = {"H1": x1}
             line = "  [수정 규칙: 정확 탐색] H1 %+.4f [%+.4f,%+.4f] %s" % (*x1, verdict(x1[1], x1[2]))
-            if len(ss) == 3 and D(rkey, "f1", "zf", "f1", ss).mean() >= THR:
+            if len(ss) == len(SEEDS) and D(rkey, "f1", "zf", "f1", ss).mean() >= THR:
                 xr = D(rkey, "f1x", "zf", "f1x", ss); raw_ = D(rkey, "f1", "zf", "f1", ss)
                 X["resid"] = ci(xr); X["thr_share"] = float(1 - xr.mean() / raw_.mean())
                 line += " | 잔여 붕괴 %+.4f [%+.4f,%+.4f], 기준값 층 비율 %.2f" % (*X["resid"], X["thr_share"])
-            if len(gs) == 3:
+            if len(gs) == len(SEEDS):
                 xa = ci(D("g8", "f1", "zf", "f1x", gs)); xb = ci(D("g8", "f1x", "zf", "f1x", gs)); X.update(g8_vs_zfr=xa, g8r_vs_zfr=xb)
                 line += "\n      γ8 − (zf+재보정) %+.4f [%+.4f,%+.4f] → %s | γ8+재보정 − (zf+재보정) %+.4f [%+.4f,%+.4f] → %s" % (
                     *xa, lab[verdict(xa[1], xa[2])], *xb, lab[verdict(xb[1], xb[2])])
@@ -295,7 +302,7 @@ def analyze(root, bb):
     # F (사후 추가 · 기술 통계): full 조건
     print("\n" + "-" * 100); print("[full 조건] (사후 추가 · 기술 통계 — 사전 고정 판정 아님)"); print("-" * 100)
     fs = [s for s in SEEDS if ("zf", s) in runs and ("g8", s) in runs]
-    if len(fs) == 3:
+    if len(fs) == len(SEEDS):
         Fm = {}
         for k in ("zf", "g8"):
             for s in fs:
@@ -306,7 +313,7 @@ def analyze(root, bb):
                               "ap": auprc(z["test_y"], z["test_full"])}
         for k, lab in (("zf", "zf"), ("g8", "γ8")):
             A = lambda m: np.mean([Fm[(k, s)][m] for s in fs])
-            print("  %-3s (n=3)  F1@0.5 %.4f | F1@재보정 %.4f | F1@재보정(정확) %.4f | AUPRC %.4f" % (lab, A("f1"), A("f1r"), A("f1x"), A("ap")))
+            print("  %-3s (n=%d)  F1@0.5 %.4f | F1@재보정 %.4f | F1@재보정(정확) %.4f | AUPRC %.4f" % (lab, len(fs), A("f1"), A("f1r"), A("f1x"), A("ap")))
         Df = lambda m: np.array([Fm[("g8", s)][m] - Fm[("zf", s)][m] for s in fs])
         a, b, c, x = ci(Df("f1")), ci(Df("f1r")), ci(Df("ap")), ci(Df("f1x"))
         print("  γ8 − zf (F1@0.5) %+.4f [%+.4f,%+.4f] %s | γ8+재보정 − zf+재보정 %+.4f [%+.4f,%+.4f] %s | AUPRC γ8 − zf %+.4f [%+.4f,%+.4f] %s" % (
@@ -398,7 +405,7 @@ if __name__ == "__main__":
     BB = sys.argv[1]
     r = analyze(".", BB)
     if r is not None:
-        out = "results/thesis_round/V2/mmimdb_v2_%s.json" % BB
+        out = "results/thesis_round/V2/mmimdb_v2_%s%s.json" % (BB, SUF)
         json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         print("\n결과 저장:", out)
     print("=== ALL DONE (MM-IMDb v2 분석 %s) ===" % BB)

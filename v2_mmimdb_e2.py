@@ -19,7 +19,8 @@ DRY = "--dry" in sys.argv
 METHODS = opt("--methods", "image_only,text_only").split(",")
 GAMMA = opt("--gamma", None)
 OUTDIR = opt("--outdir", "results/thesis_round/V2/E2_mmimdb")
-SEEDS = [1, 2, 3]
+BASE_SEEDS = [1, 2, 3]                                   # zero-fill 결과 json이 있는 기존 seed
+SEEDS = [int(x) for x in opt("--seeds", "1,2,3").split(",")]   # seed 확장: 새 seed는 seed 1~3과 같은 설정(seed만 변경)
 SKIP_KEYS = {"out", "save_preds", "save_model", "seed", "method", "causal", "smoke", "save_logits"}
 GAMMA_METHODS = ("gamma", "gamma_moddrop", "gamma_b1")   # --gamma는 이 방법들에만 적용(zerofill은 원 config 그대로 → 재현성 확인 가능)
 SIGLIP_DEFAULT = "siglip-so400m-patch14-384"
@@ -43,7 +44,7 @@ for f in sorted(glob.glob("results/*.json")):
 
 print("=" * 90); print("v2 MM-IMDb 실행기 [%s] methods=%s γ=%s → %s" % (BB, METHODS, GAMMA, OUTDIR)); print("=" * 90)
 chosen = {}
-for s in SEEDS:
+for s in BASE_SEEDS:
     L = cands.get(s, [])
     if not L:
         sys.exit("★ seed %d의 zero-fill 결과 json이 없음 → 중단(추측 실행 금지)" % s)
@@ -56,6 +57,14 @@ for s in SEEDS:
     f, c, t, i = L[0]
     chosen[s] = c
     print("seed %d ← %s (후보 %d개, 설정 동일) | zf text결손 macro %.4f, image결손 macro %.4f" % (s, f, len(L), t, i))
+NEW = [s for s in SEEDS if s not in chosen]
+if NEW:   # 새 seed: 기존 seed 1~3의 설정이 seed 외에 모두 같을 때만 그 설정을 사용
+    base = [{k: v for k, v in chosen[b].items() if k not in SKIP_KEYS} for b in BASE_SEEDS]
+    if any(m != base[0] for m in base[1:]):
+        sys.exit("★ seed 1~3의 zero-fill 설정이 seed 외에도 서로 다름 → 새 seed 설정을 정할 수 없어 중단")
+    for s in NEW:
+        chosen[s] = chosen[BASE_SEEDS[0]]
+        print("seed %d ← seed 1~3과 같은 설정(seed만 %d로 변경, 새 seed)" % (s, s))
 
 os.makedirs(OUTDIR, exist_ok=True)
 for m in METHODS:
